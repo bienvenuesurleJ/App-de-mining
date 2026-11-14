@@ -133,7 +133,7 @@ function buyer(a){const c=S.cfg,E=eq(),i=a.i,P=S.sp[a.st],p=M[a.s].p,sl=p-P.slM*
 /* AI Supervisor : toute proposition passe ici puis par le Risk Engine */
 function supervise(p,xr){const ao=agOf(p)=='opp',Dd=ao?OD:D,t=p.st!='test',nm=ao?(OSD[p.st.slice(2)]||{n:p.st}).n:(SD[p.st]?SD[p.st].n:p.st);if(t)Dd.prop++;
  log(ao?'Opportunity':'Buyer','proposition',`${p.s} ${p.type} (${nm}) entrée ${f2(p.entry,4)} SL ${f2(p.sl,4)} TP ${f2(p.tp,4)} qté ${f2(p.q,5)} R/R net ${f2(p.rr)} · potentiel net ${f2(p.q*(p.tp-p.entry-p.entry*(2*S.cfg.fee/100+S.cfg.slip/100)))} €`);
- const R=risk(p);if(p.cost<10)R.push('montant < 10 €');if(xr)R.push(xr);
+ const R=risk(p);if(p.cost<10)R.push('montant < 10 €');if(t&&p.st!='manuel'&&S.newsOn!==false&&newsImpact(p.s).veto)R.push('AI News : actualité négative importante et récente sur '+p.s+' (non vérifiée) — achat suspendu par prudence');if(xr)R.push(xr);
  if(R.length){log('Supervisor','refus',p.s+' refusé : '+R.join(', '));if(t){Dd.ref++;Dd.lr=R.join(', ');R.forEach(r=>{const k=r.replace(/[\d.,]+/g,'#');Dd.rej[k]=(Dd.rej[k]||0)+1})}order(p,R);return false}
  log('Risk','validation',p.s+' : risque '+f2(p.risk)+' € dans les limites');log('Supervisor','accord',p.s+' autorisé');if(t)Dd.acc++;order(p);return true}
 /* AI Scalper Engine */
@@ -157,7 +157,7 @@ function scalper(){const now=Date.now(),c=S.cfg;
  SY.forEach(s=>{const a=analyse(s);if(!fresh(s)){D.sym[s]='données périmées ou absentes';return}if(!a.i){D.sym[s]='historique insuffisant';return}
   D.an++;const x=' · ATR '+f2(a.i.a/a.p*100,2)+' % (coût aller-retour '+f2(2*c.fee+c.slip)+' %)';
   if(!a.sig){D.sym[s]='aucun signal : '+Object.keys(SD).filter(k=>S.strat[k]).map(k=>SD[k].n+' ('+WN[k](a.i,S.sp[k])+')').join(' ; ')+x;return}
-  D.sig++;D.sigT=now;const h=S.hist.find(y=>y.s==s),cd=c.cd*(h&&h.pnl<0&&now-h.t<9e5?3:1)*1000;
+  D.sig++;D.sigT=now;newsApply(a,s);const h=S.hist.find(y=>y.s==s),cd=c.cd*(h&&h.pnl<0&&now-h.t<9e5?3:1)*1000;
   if(a.conf<c.minScore)D.sym[s]=`signal ${a.sig} ignoré : score ${a.conf} < ${c.minScore}`+x;
   else if(S.pos.some(y=>y.s==s)||S.ord.some(o=>o.s==s&&o.status=='open'))D.sym[s]='signal '+a.sig+' : position ou ordre déjà ouvert';
   else if(now-(CD[s]||0)<cd)D.sym[s]='signal '+a.sig+' : délai anti-répétition';else cand.push(a)});
@@ -196,7 +196,7 @@ function alerts(){const now=Date.now();S.al.forEach(a=>{if(!a.on||now-(a.last||0
  else if(a.ty=='vol'&&i&&i.a/i.p*100>=a.v)fire(a,'volatilité ATR '+f2(i.a/i.p*100,3)+' %');
  else if(a.ty=='buy'){const g=analyse(a.s);if(g.sig)fire(a,'signal '+g.sig+' (score '+g.conf+')')}
  else if(a.ty=='sell'){const x=S.pos.find(p=>p.s==a.s);if(x&&i&&SD[x.st]&&SD[x.st].x(i))fire(a,'signal de sortie sur position ouverte')}})}
-async function tick(){if(tick.b)return;tick.b=1;try{TK=Date.now();await pull();await pullHT();orders();monitor();limits();alerts();scalper();oppCycle();arbitrate();S.eq.push([Date.now(),eq()]);if(S.eq.length>500)S.eq.shift();save();head();if(!['set','bt','ord','alerts','stk','strat'].includes(page))render()}finally{tick.b=0}}
+async function tick(){if(tick.b)return;tick.b=1;try{TK=Date.now();await pull();await pullHT();newsTick();orders();monitor();limits();alerts();scalper();oppCycle();arbitrate();S.eq.push([Date.now(),eq()]);if(S.eq.length>500)S.eq.shift();save();head();if(!['set','bt','ord','alerts','stk','strat'].includes(page))render()}finally{tick.b=0}}
 /* ===== UI ===== */
 const AG={on:{run:'En marche',pause:'Suspendu',stop:'Arrêté'}};
 const PG=[['dash','Accueil'],['agents','Agents'],['port','Portefeuille'],['set','Réglages'],['scalp','Scalper'],['opp','Opportunity'],['mkts','Marchés'],['news','Actus'],['strat','Stratégies'],['ord','Ordres'],['alerts','Alertes'],['stk','Actions'],['bt','Backtest'],['log','Journal']];
@@ -214,7 +214,7 @@ ${oppCard()}<h2>Dernières activités</h2>${actCard()}<h2>Évolution du portefeu
 <p class="g sm">Simulation uniquement, aucun argent réel. Aucun bénéfice n\'est garanti. Les agents ne travaillent que lorsque cette page est ouverte.</p>`},
 agents(){const last=a=>{const l=S.log.find(x=>x.a==a);return l?esc(l.m):'<span class="g">aucune activité</span>'},E=eq();
  const A=[['Administrateur suprême','Contrôle total : capital, limites, arrêt d\'urgence.',S.emerg?'Arrêt d\'urgence':'Disponible','Admin'],['AI Supervisor','Arbitre les propositions, consulte le Risk Engine, refuse ou autorise.',S.emerg?'Bloqué':'Actif','Supervisor'],
- ['AI Analyst','RSI, MACD, Bollinger, ATR, volumes et moyennes sur bougies 1 min.',SY.every(s=>(H[s]||[]).length>=21)?'Actif':'Collecte de données','Analyst'],['AI News','Actualités crypto (CryptoCompare, non vérifiées).',NEWS&&NEWS!='err'&&NEWS!='load'?'Chargé':'Non chargé','News'],
+ ['AI Analyst','RSI, MACD, Bollinger, ATR, volumes et moyennes sur bougies 1 min.',SY.every(s=>(H[s]||[]).length>=21)?'Actif':'Collecte de données','Analyst'],['AI News','Actualités crypto (CryptoCompare) : détection des actifs, ton par mots-clés, influence sur le score de l\'Analyst (±10 pts max) et veto prudent. Algorithme déterministe, aucune IA externe.',newsAgState(),'News'],
  ['AI Buyer','Calcule taille, entrée, stop-loss, take-profit et frais.','Actif','Buyer'],['AI Seller','Stop-loss, take-profit, trailing stop, sortie à 20 min.','Actif','Seller'],['AI Risk Manager','Règles déterministes : risque, exposition, pertes, drawdown, données périmées.',S.halt?'Blocage actif':'Actif','Risk'],
  ['AI Portfolio Manager','Capital, cash, exposition : '+f2(engaged()/E*100)+' % engagé.','Surveille le capital','Portfolio'],['AI Scalper','Scalping adaptatif sur 7 cryptos.',AG.on[S.scalp],'Scalper'],['AI Opportunity Trader','Opportunités sur 5 min, 15 min, 1 h et 4 h : 7 stratégies, positions de plusieurs heures, vente partielle et stop suiveur.',AG.on[S.opp],'Opportunity']];
  A.forEach(a=>a[2]=ST(a[3],a[2]));return banners()+diag()+oppCard()+oppDiag()+A.map(a=>`<div class="card"><div class="row" style="padding-top:0"><b>${a[0]}</b><span class="g">${a[2]}</span></div><div class="sm g">${a[1]}</div><div class="sm" style="margin-top:6px">Dernière action : ${last(a[3])}</div></div>`).join('')+
@@ -261,7 +261,7 @@ document.addEventListener('change',e=>{const t=e.target,d=t.dataset;
  else if(t.id=='cap'){const v=+t.value;if(v>=100&&v<=1e7)CAP=v;else{t.value=CAP;toast('Capital : entre 100 et 10 000 000 €')}}else if(t.id=='stu'){S.stk.url=t.value.trim();save()}
  else if(t.id=='imp'&&t.files[0])t.files[0].text().then(x=>{try{S=merge(JSON.parse(x));done();toast('Sauvegarde importée')}catch(e){toast('Fichier invalide')}})});
 /* News Engine */
-async function loadNews(){NEWS='load';head();render();try{const j=await(await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN')).json();NEWS=j.Data.slice(0,15)}catch(e){NEWS='err'}render()}
+/* loadNews : voir module AI News (phase 2) */
 /* Backtesting Engine */
 function bt(c,f,s,fee,slip,cap){let cash=cap,q=0,ent=0,eqs=[],tr=[];const m=(i,n)=>{let t=0;for(let k=i-n+1;k<=i;k++)t+=c[k];return t/n};
  for(let i=s+1;i<c.length;i++){const up=m(i-1,f)>m(i-1,s);
@@ -319,7 +319,7 @@ function oppCycle(){const now=Date.now(),c=S.cfg;
  OD.rc++;OD.t=now;OD.sym={};OD.an=OD.sig=0;
  SY.forEach(s=>{const a=oppAnalyse(s);if(a.err){OD.sym[s]=a.err;return}OD.an++;
   if(!a.best){OD.sym[s]='aucune opportunité : '+(a.why||'aucune stratégie active')+a.ctx;return}
-  const b=a.best,nm=OSD[b.k].n+' '+TN[b.tf];OD.sig++;OD.tot++;OD.sigT=now;
+  const b=a.best;newsApply(b,s);const nm=OSD[b.k].n+' '+TN[b.tf];OD.sig++;OD.tot++;OD.sigT=now;
   if(b.conf<c.oppMinScore)OD.sym[s]=`${nm} ignoré : score ${b.conf} < ${c.oppMinScore}`+a.ctx;
   else if(S.pos.some(y=>y.s==s)||S.ord.some(o=>o.s==s&&o.status=='open'))OD.sym[s]=nm+' : position ou ordre déjà ouvert';
   else if(now-(CO[s]||0)<c.oppCd*1000)OD.sym[s]=nm+' : délai anti-répétition';
@@ -401,6 +401,62 @@ setInterval(()=>{const e=$('#cdn');if(!e||!TK)return;const r=Math.max(0,10-(Date
 /* ===== Phase 2 : commandes de réglages ===== */
 ACT.cfgdef=()=>{if(!confirm('Remettre tous les réglages aux valeurs recommandées ? Portefeuille et historique sont conservés.'))return;try{localStorage.setItem('atc_cfg_prev',JSON.stringify(S.cfg))}catch(e){}S.cfg=DEF().cfg;log('Admin','paramètre','Réglages réinitialisés aux valeurs recommandées');done()};
 ACT.cfgprev=()=>{try{const o=JSON.parse(localStorage.getItem('atc_cfg_prev'));if(!o||typeof o!='object')throw 0;const cur=S.cfg;S.cfg=Object.assign(DEF().cfg,o);fixCfg(S.cfg);localStorage.setItem('atc_cfg_prev',JSON.stringify(cur));log('Admin','paramètre','Réglages précédents restaurés');done()}catch(e){toast('Aucun réglage précédent disponible')}};
+/* ===== Phase 2 : AI News (algorithme déterministe, sans IA externe) ===== */
+let NT=0;
+const NAS={BTC:/bitcoin|\bbtc\b/i,ETH:/ethereum|\beth\b|\bether\b/i,SOL:/solana|\bsol\b/i,XRP:/\bxrp\b|ripple/i,BNB:/\bbnb\b|binance/i,ADA:/cardano|\bada\b/i,DOGE:/dogecoin|\bdoge\b/i},
+NPOS=/approv|inflow|adopt|partner|upgrade|surge|rall(y|ies)|record high|launch|integrat|soar|bullish|accumulat/i,NNEG=/hack|exploit|\bbans?\b|banned|lawsuit|\bsues?\b|crash|plunge|outage|delist|fraud|liquidat|bearish|outflow|investigat|stolen|collapse/i,
+NEVT=/\bSEC\b|\bETF\b|\bFed\b|regulat|lawsuit|hack|exploit|\bban\b|\bCPI\b|inflation|rate (cut|hike)|halving/i,NUNC=/rumou?r|reportedly|allegedly|could|\bmay\b|might|expected to|sources? (say|said)|speculat|\?/i;
+function newsInfo(n){const t=(n.title||'')+' '+(n.categories||''),age=(Date.now()-n.published_on*1000)/36e5,as=SY.filter(s=>NAS[s].test(t)),po=NPOS.test(n.title||''),ne=NNEG.test(n.title||''),sg=po&&!ne?1:ne&&!po?-1:0,ev=NEVT.test(n.title||''),unc=NUNC.test(n.title||'');
+ return{as,sg,ev,unc,age,fr:age<2?'récente (< 2 h)':age<24?'du jour':age<72?'ancienne (> 24 h)':'obsolète (> 3 jours)',imp:(ev?2:1)+(as.length?1:0)}}
+const nw1=i=>(i.ev?6:3)*(i.unc?.5:1)*(i.age<2?1:.5);
+function newsImpact(s){let adj=0,it=[],veto=false;(Array.isArray(NEWS)?NEWS:[]).forEach(n=>{const i=newsInfo(n);if(!i.as.includes(s)||i.age>6||!i.sg)return;adj+=nw1(i)*i.sg;it.push({n,i});if(i.sg<0&&i.ev&&!i.unc&&i.age<2)veto=true});return{adj:Math.max(-10,Math.min(10,Math.round(adj))),it,veto}}
+function newsApply(a,s){if(S.newsOn===false)return;const w=newsImpact(s);a.nw=w;if(!w.adj)return;a.conf=Math.max(0,Math.min(95,a.conf+w.adj));const k=s+'|'+w.it.map(x=>x.n.published_on).join(',');
+ if(!newsApply.sent[k]){newsApply.sent[k]=1;log('News','message','→ AI Analyst : '+s+', '+w.it.length+' actualité(s) récente(s), '+(w.adj>0?'+':'')+w.adj+' pt(s) sur le score. Hypothèse non vérifiée : « '+String(w.it[0].n.title).slice(0,80)+' »')}}
+newsApply.sent={};
+async function loadNews(q){if(!q){NEWS='load';head();render()}try{const j=await(await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN')).json();if(!Array.isArray(j.Data))throw 0;NEWS=j.Data.slice(0,40);NT=Date.now();
+ const n=NEWS.filter(x=>{const i=newsInfo(x);return i.as.length&&i.age<6}).length;log('News','analyse',NEWS.length+' actualités récupérées (CryptoCompare), '+n+' récentes concernent vos actifs')}catch(e){if(!Array.isArray(NEWS))NEWS='err';log('News','erreur','source d\'actualités injoignable')}if(['news','agents','dash'].includes(page))render()}
+function newsTick(){if(S.newsOn!==false&&(S.scalp=='run'||S.opp=='run')&&NEWS!='load'&&Date.now()-NT>3e5){NT=Date.now();loadNews(1)}}
+function newsAgState(){if(S.newsOn===false)return'Suspendu (influence désactivée)';if(NEWS=='err')return'Erreur : source injoignable';if(NEWS=='load')return'Analyse en cours…';return Array.isArray(NEWS)?'Actualités analysées il y a '+Math.round((Date.now()-NT)/60000)+' min':'En attente : actualités non chargées'}
+function newsWhy(i){if(!i.as.length)return'Hors de vos 7 actifs : aucun effet sur les agents.';if(i.age>6)return'Trop ancienne (> 6 h) : ignorée par l\'Analyst.';if(!i.sg)return'Ton indéterminé : aucun effet sur le score.';
+ return'Impact potentiel (hypothèse, pas une certitude) : environ '+(i.sg>0?'+':'−')+Math.round(nw1(i))+' pt(s) sur le score de '+i.as.join('/')+(i.sg<0&&i.ev&&!i.unc&&i.age<2?' et achat suspendu par prudence':'')}
+PAGES.news=()=>{const on=S.newsOn!==false;let b='';
+ if(NEWS=='load')b='<p class="g">Chargement…</p>';else if(NEWS=='err')b='<div class="bad">Actualités indisponibles (source injoignable). Aucune actualité n\'est inventée.</div>';
+ else if(Array.isArray(NEWS))b=NEWS.map(n=>({n,i:newsInfo(n)})).sort((x,y)=>y.i.imp-x.i.imp||y.n.published_on-x.n.published_on).slice(0,25).map(({n,i})=>`<div class="card"><b>${esc(n.title)}</b><div class="sm g">${esc((n.source_info&&n.source_info.name)||n.source||'source inconnue')} · ${dt(n.published_on*1000)} · langue ${esc(n.lang||'?')} · ${i.fr}</div><div class="sm" style="margin-top:4px">Actifs : ${i.as.length?i.as.join(', '):'aucun de vos 7 actifs'} · importance ${['','faible','moyenne','élevée'][i.imp]} · ton ${i.sg>0?'<span class=up>positif</span>':i.sg<0?'<span class=dn>négatif</span>':'neutre / indéterminé'} · ${i.unc?'information incertaine (formulation conditionnelle ou rumeur)':'source unique, non vérifiée'}</div><div class="sm g">${esc(newsWhy(i))}</div>${/^https:\/\//.test(n.url)?`<a class="sm" style="color:var(--bl)" href="${esc(n.url)}" target="_blank" rel="noopener">Lire la source</a>`:''}</div>`).join('');
+ const pp=S.pos.map(x=>({x,w:newsImpact(x.s)})).filter(o=>o.w.it.length);
+ return banners()+`<div class="card"><div class="row" style="padding-top:0"><b>AI News</b><b>${newsAgState()}</b></div><div class="sm g">Source : CryptoCompare (flux public, anglais). Les actifs, le ton (positif/négatif) et l'importance sont détectés par mots-clés : algorithme déterministe, pas une IA externe, donc approximatif. Aucune actualité n'est vérifiée par l'application. Actualités actions : non connectées.</div><div class="sm" style="margin-top:6px">Influence sur les décisions : <b>${on?'activée':'désactivée'}</b>. Si activée, une actualité récente (&lt; 6 h) sur un actif ajuste le score de l'Analyst de ±10 points maximum ; une actualité négative importante, récente et non conditionnelle fait refuser l'achat par le Supervisor. Le Risk Manager contrôle ensuite l'ordre comme d'habitude.</div><div class="btns"><button data-a="news">Actualiser</button><button class="s" data-a="nwt">${on?'Désactiver':'Activer'} l'influence sur les agents</button></div></div>`+
+ `<div class="card"><b>Impact sur le portefeuille</b>${pp.map(o=>`<div class="row sm"><span>${o.x.s} (position ouverte)</span><span>${o.w.it.length} actualité(s), ${o.w.adj>0?'+':''}${o.w.adj} pt(s)</span></div>`).join('')||'<div class="sm g">Aucune actualité récente ne concerne vos positions ouvertes.</div>'}</div>`+b};
+ACT.nwt=()=>{S.newsOn=S.newsOn===false;log('Admin','paramètre','influence AI News = '+(S.newsOn!==false));done()};
+/* ===== Phase 2 : mode démonstration (état totalement séparé) ===== */
+let DM=null,DT=null;
+function dnew(){const d=DEF();d.cfg=JSON.parse(JSON.stringify(S.cfg));return{S:d,M:{DEMO:{p:100,chg:0,vol:1e6,t:Date.now()}},i:0,play:false,sp:1,p:null}}
+function withDemo(f){const sv=S,mv=M;try{S=DM.S;M=DM.M;return f()}finally{S=sv;M=mv}}
+const DST=[
+['Analyst','AI Analyst détecte une opportunité',()=>log('Analyst','analyse','[DÉMO] DEMO : RSI 58, MACD > signal, volume ×1,8, tendance haussière (indicateurs synthétiques)')],
+['News','AI News transmet une information de démonstration',()=>log('News','message','[DÉMO] → AI Analyst : actualité fictive « Annonce positive de démonstration sur DEMO » (créée pour la démo, aucune source réelle)')],
+['Buyer','AI Buyer prépare un achat',()=>{const E=eq(),c=S.cfg,pr=M.DEMO.p,a=.8,sl=pr-1.5*a,tp=pr+3*a,ep=pr*(1+c.slip/100),f=c.fee/100,rpu=ep-sl+ep*(2*f+c.slip/100),q=Math.min(E*c.risk/100/rpu,E*.2/ep);DM.p=mkp('DEMO','market',0,sl,tp,q,'test');
+ log('Buyer','proposition',`[DÉMO] entrée ${f2(DM.p.entry,2)} · SL ${f2(sl,2)} · TP ${f2(tp,2)} · qté ${f2(q,3)} · capital engagé ${f2(DM.p.cost)} € · R/R net ${f2(DM.p.rr)}`)}],
+['Risk','AI Risk Manager contrôle le risque',()=>{const R=risk(DM.p);log('Risk',R.length?'refus':'validation','[DÉMO] '+(R.length?'risque refusé : '+R.join(', '):'risque '+f2(DM.p.risk)+' € dans les limites ('+S.cfg.risk+' % du capital)'))}],
+['Supervisor','AI Supervisor prend sa décision',()=>{DM.ok=supervise(DM.p)}],
+['Simulation','Le moteur simule l\'achat',()=>{const x=S.pos[0];log('Simulation','exécution',x?`[DÉMO] achat simulé : ${f2(x.q,3)} @ ${f2(x.e,2)} · cash restant ${f2(S.cash)} €`:'[DÉMO] aucun achat : proposition refusée')}],
+['Portfolio','Le portefeuille de démonstration évolue',()=>{M.DEMO.p=101.2;log('Portfolio','suivi','[DÉMO] DEMO monte à 101,20 : valeur du portefeuille de démonstration '+f2(eq())+' €')}],
+['Seller','AI Seller surveille la position',()=>{monitor();const x=S.pos[0];log('Seller','surveillance',x?`[DÉMO] stop suiveur remonté à ${f2(x.sl,2)} (objectif ${f2(x.tp,2)})`:'[DÉMO] aucune position')}],
+['Simulation','Le moteur simule une vente',()=>{M.DEMO.p=102.6;monitor()}],
+['Portfolio','Résultat net calculé',()=>{const h=S.hist[0];log('Portfolio','résultat',h?`[DÉMO] ${h.why} : résultat net ${f2(h.pnl)} € (frais ${f2(h.fees)} €) · valeur finale ${f2(eq())} €`:'[DÉMO] aucune vente effectuée')}]];
+function dstep(){if(!DM||!DM.play)return;const st=DST[DM.i];withDemo(()=>{DM.M.DEMO.t=Date.now();try{st[2]()}catch(e){log('Admin','erreur','[DÉMO] '+e.message)}});DM.i++;if(DM.i>=DST.length)DM.play=false;if(page=='demo')render();dsched()}
+function dsched(){clearTimeout(DT);if(DM&&DM.play&&DM.i<DST.length)DT=setTimeout(dstep,3500/DM.sp)}
+ACT.dst=()=>{clearTimeout(DT);DM=DM?null:dnew();render()};
+ACT.dpl=()=>{if(!DM)return;if(DM.i>=DST.length)DM=Object.assign(dnew(),{sp:DM.sp});DM.play=true;dsched();render()};
+ACT.dpa=()=>{if(DM){DM.play=false;clearTimeout(DT);render()}};
+ACT.dre=()=>{if(DM){clearTimeout(DT);DM=Object.assign(dnew(),{sp:DM.sp});render()}};
+ACT.dsp=v=>{if(DM){DM.sp=+v;dsched();render()}};
+PAGES.demo=()=>{const w=`<div class="warn"><b>MODE DÉMONSTRATION</b> — scénario <b>synthétique</b> sur un actif fictif « DEMO ». Aucun ordre réel, aucune donnée de marché. Votre portefeuille principal n'est ni lu ni modifié ; les compteurs et l'historique réels restent séparés. Les agents sont des algorithmes déterministes qui exécutent les vraies fonctions du moteur sur ce portefeuille de démonstration.</div>`;
+ if(!DM)return w+'<div class="card"><div class="sm g">Rejoue un cycle complet : détection, actualité de démonstration, proposition d\'achat, contrôle du risque, décision, achat simulé, surveillance, vente simulée et résultat net (10 étapes).</div><div class="btns"><button data-a="dst">Activer le mode démonstration</button></div></div>';
+ const s=DM.S,E=withDemo(()=>eq());
+ return w+`<div class="card"><div class="row" style="padding-top:0"><b>Étape ${Math.min(DM.i,DST.length)} / ${DST.length}</b><b>${DM.play?'En lecture':DM.i>=DST.length?'Terminé':'En pause'}</b></div><div class="btns"><button data-a="dpl">${DM.i>=DST.length?'Rejouer':'Lecture'}</button><button class="s" data-a="dpa">Pause</button><button class="s" data-a="dre">Recommencer</button>${[1,2,4].map(v=>`<button class="${DM.sp==v?'':'s'}" data-a="dsp" data-v="${v}">×${v}</button>`).join('')}<button class="s" data-a="dst">Désactiver</button></div>${DST.map((x,k)=>`<div class="row sm"><span>${k<DM.i?'✔':k==DM.i&&DM.play?'▶':'·'} ${k+1}. ${x[1]}</span><span class="g">${x[0]}</span></div>`).join('')}</div>
+<div class="card"><b>Portefeuille de démonstration (fictif)</b>${row('Capital de départ',f2(s.init)+' €')}${row('Valeur',f2(E)+' €')}${row('Cash',f2(s.cash)+' €')}${row('Positions virtuelles',s.pos.length)}${row('Résultat',`<span class="${cl(E-s.init)}">${f2(E-s.init)} €</span>`)}</div>
+<h2>Historique de démonstration</h2><div class="card">${s.hist.map(hrow).join('')||'<p class="g">Aucune opération pour l\'instant.</p>'}</div>
+<h2>Échanges entre agents (démonstration)</h2><div class="card">${s.log.slice(0,25).map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')} · ${esc(l.a)}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g">En attente du lancement.</p>'}</div>`};
+PG.splice(2,0,['demo','Démo']);
 /* Start */
 flushFix();head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script></body></html>
