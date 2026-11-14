@@ -1,1 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#05070B">
+<title>AI Trading Central — BlackBlue</title>
+<style>
+:root{--k:#05070B;--k2:#0A0F18;--n:#101C32;--b:#1677FF;--bl:#32A8FF;--w:#F5F8FF;--g:#8491A5;--ok:#2ecc8f;--ko:#ff5c6c}
+*{box-sizing:border-box;margin:0}
+body{background:var(--k);color:var(--w);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(66px + env(safe-area-inset-bottom));overflow-x:hidden}
+header{position:sticky;top:0;z-index:5;background:#05070Bee;backdrop-filter:blur(8px);border-bottom:1px solid #1677ff33;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+header h1{font-size:1rem;flex:1;min-width:140px}header h1 span{color:var(--bl)}
+main{padding:12px;max-width:1100px;margin:auto}
+h2{font-size:1.05rem;margin:14px 0 8px}
+.grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.card{background:linear-gradient(var(--k2),var(--n));border:1px solid #1677ff33;border-radius:12px;padding:12px;box-shadow:0 0 18px #1677ff12;margin-bottom:10px}
+.grid>.card{margin:0}
+.big{font-size:1.35rem;font-weight:700}.g{color:var(--g)}.up{color:var(--ok)}.dn{color:var(--ko)}.sm{font-size:.82rem}
+.row{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #1677ff22}
+.row:last-child{border:0}
+button,select,input{font:inherit;min-height:44px;border-radius:10px}
+button{background:var(--b);color:#fff;border:0;padding:10px 14px}
+button.s{background:#1677ff22;border:1px solid #1677ff66}button.d{background:#b3261e}
+select,input{background:var(--k);color:var(--w);border:1px solid #1677ff66;padding:8px;width:100%}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.warn{background:#3a2a00;border:1px solid #b88a00;border-radius:10px;padding:10px;margin-bottom:10px}
+.bad{background:#3a0f14;border:1px solid var(--ko);border-radius:10px;padding:10px;margin-bottom:10px}
+label{display:block;margin:10px 0 2px}
+nav{position:fixed;bottom:0;left:0;right:0;z-index:6;display:flex;overflow-x:auto;background:var(--k2);border-top:1px solid #1677ff55;padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:0 0 auto;min-width:78px;background:none;border-radius:0;color:var(--g);padding:12px 8px}
+nav button.on{color:var(--w);box-shadow:inset 0 -3px var(--bl)}
+#toast{position:fixed;left:12px;right:12px;bottom:80px;z-index:9;background:var(--n);border:1px solid var(--bl);border-radius:10px;padding:10px;display:none}
+@media(min-width:900px){body{padding:0 0 0 180px}nav{top:0;bottom:auto;width:180px;height:100%;flex-direction:column;border-top:0;border-right:1px solid #1677ff55;padding-top:60px}nav button{text-align:left;padding:14px}nav button.on{box-shadow:inset 3px 0 var(--bl)}#toast{left:auto;width:360px;bottom:20px}}
+</style></head><body>
+<header></header><nav></nav><main></main><div id="toast"></div>
+<noscript>JavaScript est nécessaire.</noscript>
+<script>
+/* ===== Core / Storage ===== */
+const $=s=>document.querySelector(s),f2=(x,d=2)=>Number(x).toLocaleString('fr-FR',{minimumFractionDigits:d,maximumFractionDigits:d}),
+esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),cl=x=>x>=0?'up':'dn',
+dt=t=>new Date(t).toLocaleString('fr-FR'),SY=['BTC','ETH','SOL','XRP','BNB','ADA','DOGE'];
+const DEF=()=>({cash:10000,init:10000,pos:[],hist:[],log:[],eq:[],peak:10000,dayStart:10000,day:new Date().toDateString(),emerg:false,halt:null,scalp:'stop',strat:{mom:true,rev:true},n:0,
+cfg:{risk:.25,dayLoss:1,dd:5,maxPos:5,fee:.1,slip:.05,stale:60,budget:40,cd:60}});
+function load(){try{const o=JSON.parse(localStorage.getItem('atc_v1'));if(o){const d=DEF();return Object.assign(d,o,{cfg:Object.assign(d.cfg,o.cfg)})}}catch(e){}return null}
+function save(){try{localStorage.setItem('atc_v1',JSON.stringify(S))}catch(e){}}
+let S=load()||DEF(),M={},H={},FX=0,page='dash',NEWS=null,BTR=null,BTS='BTC',LF='',CAP=S.init,bad=null,CD={},lastOk=0;
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toast.h);toast.h=setTimeout(()=>t.style.display='none',5000)}
+/* Audit Engine */
+function log(a,ty,m){S.log.unshift({t:Date.now(),a,ty,m});if(S.log.length>400)S.log.length=400;if(ty=='alerte')toast(m)}
+/* ===== Market Data Engine (Binance, données publiques) ===== */
+const BS=['https://data-api.binance.vision','https://api.binance.com'];
+async function bj(p){for(const b of BS){try{const r=await fetch(b+p);if(r.ok)return await r.json()}catch(e){}}throw new Error('indisponible')}
+async function pull(){try{
+ const d=await bj('/api/v3/ticker/24hr?symbols='+encodeURIComponent(JSON.stringify([...SY.map(s=>s+'USDT'),'EURUSDT'])));
+ const fx=+d.find(x=>x.symbol=='EURUSDT').lastPrice;if(!(fx>0))throw 0;FX=fx;const now=Date.now();
+ d.forEach(x=>{const s=x.symbol.replace('USDT','');if(s=='EUR')return;const p=+x.lastPrice/FX;M[s]={p,chg:+x.priceChangePercent,vol:+x.quoteVolume/FX,t:now};(H[s]=H[s]||[]).push(p);if(H[s].length>300)H[s].shift()});
+ bad=null;lastOk=now}catch(e){bad='Données de marché indisponibles : aucune opération ne peut être ouverte tant que la connexion à Binance ne revient pas.'}}
+const fresh=s=>M[s]&&Date.now()-M[s].t<S.cfg.stale*1000;
+/* ===== Analyst Engine ===== */
+const sma=(a,n)=>a.slice(-n).reduce((x,y)=>x+y,0)/n;
+function rsi(a,n=14){let g=0,l=0;for(let i=a.length-n;i<a.length;i++){const d=a[i]-a[i-1];d>0?g+=d:l-=d}return l==0?100:100-100/(1+g/l)}
+function analyse(s){const a=H[s]||[];if(a.length<21)return{s,n:a.length,sig:null};
+ const r=rsi(a),f=sma(a,5),m=sma(a,20),p=a[a.length-1];let sig=null,conf=0;
+ if(S.strat.mom&&f>m&&r>52&&r<68){sig='momentum';conf=Math.min(90,50+(f/m-1)*4000)}
+ else if(S.strat.rev&&r<28&&p>a[a.length-2]){sig='retour moyenne';conf=Math.min(85,50+(30-r)*2)}
+ return{s,n:a.length,r,f,m,p,sig,conf:Math.round(conf)}}
+/* ===== Portfolio Engine ===== */
+const eq=()=>S.cash+S.pos.reduce((t,x)=>t+x.q*(M[x.s]?M[x.s].p:x.e),0),
+engaged=()=>S.pos.reduce((t,x)=>t+x.q*x.e,0),
+lossy=()=>S.hist.length>=3&&S.hist.slice(0,3).every(h=>h.pnl<0);
+/* ===== Risk Engine (règles déterministes) ===== */
+function risk(p){const c=S.cfg,E=eq(),R=[];
+ if(S.emerg)R.push('arrêt d\'urgence actif');if(S.halt)R.push('limite atteinte : '+S.halt);
+ if(!fresh(p.s))R.push('donnée périmée ou absente');
+ if(S.pos.length>=c.maxPos)R.push('nombre max de positions atteint');
+ if(S.pos.some(x=>x.s==p.s))R.push('position déjà ouverte sur '+p.s);
+ if(p.risk>E*c.risk/100*1.001)R.push('risque par opération > limite');
+ if(p.cost>E*.25)R.push('exposition par actif > 25 %');
+ if(p.cost+p.fee>S.cash)R.push('cash insuffisant');
+ return R}
+function limits(){const E=eq(),c=S.cfg;if(S.day!=new Date().toDateString()){S.day=new Date().toDateString();S.dayStart=E;if(S.halt&&S.halt.startsWith('perte'))S.halt=null}
+ S.peak=Math.max(S.peak,E);if(S.halt)return;
+ const dl=(E-S.dayStart)/S.dayStart*100,dd=(S.peak-E)/S.peak*100;
+ if(dl<=-c.dayLoss)stop('perte journalière '+f2(dl)+' % (limite '+c.dayLoss+' %)');
+ else if(dd>=c.dd)stop('drawdown '+f2(dd)+' % (limite '+c.dd+' %)')}
+function stop(m){S.halt=m;if(S.scalp=='run')S.scalp='pause';log('Risk','alerte','Blocage automatique : '+m+'. Nouvelles opérations bloquées, Scalper suspendu.')}
+/* ===== Simulation Engine ===== */
+function exec(p,sig){S.cash-=p.cost+p.fee;S.pos.push({id:++S.n,s:p.s,q:p.q,e:p.entry,sl:p.sl,tp:p.tp,hi:p.entry,fee:p.fee,t:Date.now(),st:sig});
+ log('Simulation','exécution',`Achat simulé ${p.s} ${f2(p.q,5)} @ ${f2(p.entry,4)} € (frais ${f2(p.fee)} €)`)}
+function close(x,why,px){const c=S.cfg,ex=px*(1-c.slip/100),pr=x.q*ex,fee=pr*c.fee/100,pnl=pr-fee-(x.q*x.e+x.fee);
+ S.cash+=pr-fee;S.pos=S.pos.filter(p=>p.id!=x.id);S.hist.unshift({t:Date.now(),s:x.s,q:x.q,e:x.e,x:ex,pnl,fees:x.fee+fee,why,st:x.st});if(S.hist.length>500)S.hist.length=500;
+ log('Seller','fermeture',`${x.s} fermé (${why}) P&L net ${f2(pnl)} €`)}
+/* Seller Engine */
+function monitor(){[...S.pos].forEach(x=>{if(!fresh(x.s))return;const p=M[x.s].p;x.hi=Math.max(x.hi,p);
+ if(p>x.e*1.004)x.sl=Math.max(x.sl,x.hi*.997);
+ if(p<=x.sl)close(x,x.sl>x.e?'trailing stop':'stop-loss',p);else if(p>=x.tp)close(x,'take-profit',p);
+ else if(Date.now()-x.t>20*60000)close(x,'sortie temporelle 20 min',p)})}
+/* Buyer Engine */
+function buyer(a){const c=S.cfg,E=eq(),p=M[a.s].p,sl=p*(a.sig=='momentum'?.995:.994),tp=p+(p-sl)*1.5,entry=p*(1+c.slip/100),
+ rpu=(entry-sl)+entry*c.fee/100*2;let q=E*c.risk/100/rpu;
+ const avail=Math.max(0,E*c.budget/100*(1-S.pos.length/c.maxPos)*(lossy()?.5:1)-engaged());
+ q=Math.min(q,avail/(entry*(1+c.fee/100)),E*.2/entry);const cost=q*entry;
+ return{s:a.s,entry,sl,tp,q,cost,fee:cost*c.fee/100,risk:q*rpu}}
+/* AI Supervisor */
+function supervise(a){const p=buyer(a);
+ log('Buyer','proposition',`${p.s} (${a.sig}) entrée ${f2(p.entry,4)} SL ${f2(p.sl,4)} TP ${f2(p.tp,4)} qté ${f2(p.q,5)}`);
+ const R=risk(p);if(p.cost<10)R.push('budget Scalper insuffisant');
+ if(R.length){log('Supervisor','refus',p.s+' refusé : '+R.join(', '));return}
+ log('Risk','validation',p.s+' : risque '+f2(p.risk)+' € dans les limites');log('Supervisor','accord',p.s+' autorisé pour la simulation');exec(p,a.sig)}
+/* AI Scalper Engine */
+function scalper(){if(S.scalp!='run'||S.emerg||S.halt)return;
+ SY.map(analyse).filter(a=>a.sig&&a.conf>=60&&!S.pos.some(x=>x.s==a.s)&&Date.now()-(CD[a.s]||0)>S.cfg.cd*1000).sort((a,b)=>b.conf-a.conf).forEach(a=>{
+  CD[a.s]=Date.now();log('Analyst','analyse',`${a.s} signal ${a.sig}, RSI ${f2(a.r,0)}, confiance ${a.conf} %`);supervise(a)})}
+async function tick(){await pull();monitor();limits();scalper();S.eq.push([Date.now(),eq()]);if(S.eq.length>500)S.eq.shift();save();head();if(!['set','bt'].includes(page))render()}
+/* ===== UI ===== */
+const AG={on:{run:'En marche',pause:'Suspendu',stop:'Arrêté'}};
+const PG=[['dash','Accueil'],['agents','Agents'],['port','Portefeuille'],['set','Réglages'],['scalp','Scalper'],['mkts','Marchés'],['news','Actus'],['bt','Backtest'],['log','Journal']];
+function head(){const E=eq();$('header').innerHTML=`<h1>AI Trading Central <span>BlackBlue</span></h1><b>${f2(E)} €</b><span class="${cl(E-S.init)} sm">${f2((E-S.init)/S.init*100)} %</span><button class="${S.emerg?'s':'d'}" data-a="em">${S.emerg?'Lever l\'arrêt':'Arrêt d\'urgence'}</button>`;
+ $('nav').innerHTML=PG.map(p=>`<button class="${p[0]==page?'on':''}" data-a="pg" data-v="${p[0]}">${p[1]}</button>`).join('')}
+const row=(l,v)=>`<div class="row"><span class="g">${l}</span><b>${v}</b></div>`,card=(l,v,c='')=>`<div class="card"><div class="g sm">${l}</div><div class="big ${c}">${v}</div></div>`;
+function chart(a){if(a.length<2)return'<p class="g">Courbe en construction (un point toutes les 10 s).</p>';const w=600,h=150,v=a.map(x=>x[1]),lo=Math.min(...v),hi=Math.max(...v),r=hi-lo||1;
+ return`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto"><polyline fill="none" stroke="#32A8FF" stroke-width="2" points="${a.map((x,i)=>(i/(a.length-1)*w).toFixed(1)+','+(h-8-(x[1]-lo)/r*(h-16)).toFixed(1)).join(' ')}"/></svg><div class="g sm">min ${f2(lo)} € · max ${f2(hi)} €</div>`}
+function banners(){return(S.emerg?'<div class="bad">Arrêt d\'urgence actif : aucune nouvelle opération. Les positions ouvertes sont conservées et l\'historique est préservé.</div>':'')+(S.halt?`<div class="bad">Blocage : ${esc(S.halt)}. <button class="s" data-a="unhalt">Lever le blocage (réinitialise les références)</button></div>`:'')+(bad?`<div class="bad">${bad}</div>`:'')}
+function stats(){const h=S.hist,w=h.filter(x=>x.pnl>0),l=h.filter(x=>x.pnl<=0),sw=w.reduce((t,x)=>t+x.pnl,0),sl=l.reduce((t,x)=>t+x.pnl,0);return{n:h.length,sw,sl,net:sw+sl,fees:h.reduce((t,x)=>t+x.fees,0),wr:h.length?w.length/h.length*100:0}}
+const hrow=h=>`<div class="row"><span>${esc(h.s)} <span class="g sm">${esc(h.why)} · ${dt(h.t)}</span></span><b class="${cl(h.pnl)}">${f2(h.pnl)} €</b></div>`;
+const PAGES={
+dash(){const E=eq(),st=stats(),run=S.scalp=='run'?1:0;return banners()+`<div class="grid">${card('Valeur du portefeuille',f2(E)+' €')}${card('Cash',f2(S.cash)+' €')}${card('Capital engagé',f2(engaged())+' €')}${card('Résultat total',f2(E-S.init)+' €',cl(E-S.init))}${card('Aujourd\'hui',f2(E-S.dayStart)+' €',cl(E-S.dayStart))}${card('Positions ouvertes',S.pos.length)}${card('Agents en marche',run+' / 1 actif · Supervisor '+(S.emerg?'bloqué':'actif'))}${card('Drawdown',f2((S.peak-E)/S.peak*100)+' %')}</div>
+<h2>Évolution du portefeuille</h2><div class="card">${chart(S.eq.slice(-200))}</div><h2>Dernières transactions</h2><div class="card">${S.hist.slice(0,5).map(hrow).join('')||'<p class="g">Aucune transaction. Démarrez le Scalper dans l\'onglet Scalper : il a besoin d\'environ 4 minutes de données avant son premier signal.</p>'}</div>
+<p class="g sm">Simulation uniquement, aucun argent réel. Aucun bénéfice n\'est garanti. Les agents ne travaillent que lorsque cette page est ouverte.</p>`},
+agents(){const last=a=>{const l=S.log.find(x=>x.a==a);return l?esc(l.m):'<span class="g">aucune activité</span>'},E=eq();
+ const A=[['Administrateur suprême','Contrôle total : capital, limites, arrêt d\'urgence.',S.emerg?'Arrêt d\'urgence':'Actif','Admin'],['AI Supervisor','Arbitre les propositions, consulte le Risk Engine, refuse ou autorise.',S.emerg?'Bloqué':'Actif','Supervisor'],
+ ['AI Analyst','RSI14, moyennes mobiles 5/20 sur les prix collectés toutes les 10 s.',SY.every(s=>(H[s]||[]).length>=21)?'Actif':'Collecte de données','Analyst'],['AI News','Actualités crypto (CryptoCompare, non vérifiées).',NEWS&&NEWS!='err'&&NEWS!='load'?'Chargé':'Non chargé','News'],
+ ['AI Buyer','Calcule taille, entrée, stop-loss, take-profit et frais.','Actif','Buyer'],['AI Seller','Stop-loss, take-profit, trailing stop, sortie à 20 min.','Actif','Seller'],['AI Risk Manager','Règles déterministes : risque, exposition, pertes, drawdown, données périmées.',S.halt?'Blocage actif':'Actif','Risk'],
+ ['AI Portfolio Manager','Capital, cash, exposition : '+f2(engaged()/E*100)+' % engagé.','Actif','Portfolio'],['AI Scalper','Scalping adaptatif sur 7 cryptos.',AG.on[S.scalp],'Scalper']];
+ return banners()+A.map(a=>`<div class="card"><div class="row" style="padding-top:0"><b>${a[0]}</b><span class="g">${a[2]}</span></div><div class="sm g">${a[1]}</div><div class="sm" style="margin-top:6px">Dernière action : ${last(a[3])}</div></div>`).join('')+
+ `<h2>Échanges entre agents</h2><div class="card">${S.log.filter(l=>['analyse','proposition','validation','accord','refus','exécution','fermeture'].includes(l.ty)).slice(0,14).map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')} · ${l.a}</span><span class="${l.ty=='refus'?'dn':''}">${esc(l.m)}</span></div>`).join('')||'<p class="g">Aucun échange pour l\'instant.</p>'}</div>`},
+port(){const E=eq(),st=stats(),unr=S.pos.reduce((t,x)=>t+(M[x.s]?(M[x.s].p-x.e)*x.q:0),0);
+ return banners()+`<div class="card">${row('Capital initial',f2(S.init)+' €')}${row('Valeur totale',f2(E)+' €')}${row('Liquidités',f2(S.cash)+' €')}${row('Capital engagé',f2(engaged())+' €')}${row('Gains réalisés','<span class=up>'+f2(st.sw)+' €</span>')}${row('Pertes réalisées','<span class=dn>'+f2(st.sl)+' €</span>')}${row('Gains non réalisés','<span class="'+cl(unr)+'">'+f2(unr)+' €</span>')}${row('Frais payés',f2(st.fees)+' €')}${row('Résultat net',`<span class="${cl(E-S.init)}">${f2(E-S.init)} €</span>`)}</div>
+<h2>Positions ouvertes</h2>${S.pos.map(x=>{const p=M[x.s]?M[x.s].p:x.e,pl=(p-x.e)*x.q;return`<div class="card"><div class="row" style="padding-top:0"><b>${x.s} · ${esc(x.st)}</b><b class="${cl(pl)}">${f2(pl)} €</b></div><div class="sm g">Qté ${f2(x.q,5)} · entrée ${f2(x.e,4)} € · actuel ${f2(p,4)} €${fresh(x.s)?'':' · <span class=dn>donnée périmée</span>'}<br>SL ${f2(x.sl,4)} € · TP ${f2(x.tp,4)} €</div><div class="btns"><button class="s" data-a="close" data-v="${x.id}">Fermer</button></div></div>`}).join('')||'<p class="g">Aucune position.</p>'}
+<h2>Historique</h2><div class="card">${S.hist.slice(0,30).map(hrow).join('')||'<p class="g">Aucune opération.</p>'}</div>`},
+mkts(){return banners()+`<div class="card sm g">Source : Binance (données publiques), interrogées toutes les 10 s : quasi temps réel, pas du tick-by-tick. Prix convertis USDT → € avec le cours EURUSDT${FX?' ('+f2(FX,4)+')':''}. <b>Actions et ETF : non connectés</b> — aucune source gratuite fiable n'est accessible depuis un fichier HTML seul sans clé API ; un backend serait nécessaire.</div>`+SY.map(s=>{const m=M[s],a=analyse(s);return`<div class="card"><div class="row" style="padding-top:0"><b>${s}</b><b>${m?f2(m.p,m.p<1?5:2)+' €':'indisponible'}</b></div>${m?`<div class="sm g">24 h <span class="${cl(m.chg)}">${f2(m.chg)} %</span> · volume ${f2(m.vol/1e6,1)} M€ · tendance ${a.sig||a.f==null?(a.f>a.m?'haussière':'baissière'):(a.f>a.m?'haussière':'baissière')}${a.n<21?' (collecte '+a.n+'/21)':''} · maj il y a ${Math.round((Date.now()-m.t)/1000)} s${fresh(s)?'':' · <span class=dn>PÉRIMÉE</span>'}</div>`:''}</div>`}).join('')},
+scalp(){const E=eq(),st=stats(),al=E*S.cfg.budget/100,en=engaged(),sg=S.log.filter(l=>l.a=='Analyst').slice(0,5);
+ return banners()+`<div class="card"><div class="row" style="padding-top:0"><b>État</b><b>${AG.on[S.scalp]}</b></div><div class="btns"><button data-a="sc" data-v="run">Démarrer</button><button class="s" data-a="sc" data-v="pause">Suspendre</button><button class="s" data-a="sc" data-v="stop">Arrêter</button><button class="d" data-a="closeall">Fermer les positions</button></div>
+<div class="sm g">Horizon : prix collectés toutes les 10 s, analyse RSI/moyennes 5-20, sorties à 20 min maximum. Budget adaptatif : il baisse avec le nombre de positions ouvertes et est divisé par deux après 3 pertes consécutives. Il n'augmente jamais pour compenser une perte.</div></div>
+<div class="card">${row('Capital alloué (max)',f2(al)+' €')}${row('Capital disponible',f2(Math.max(0,al-en))+' €')}${row('Positions ouvertes',S.pos.length)}${row('Opérations',st.n)}${row('Gains / pertes',f2(st.sw)+' € / '+f2(st.sl)+' €')}${row('Résultat net',`<span class="${cl(st.net)}">${f2(st.net)} €</span>`)}${row('Taux de réussite',f2(st.wr,0)+' %')}${row('Frais payés',f2(st.fees)+' €')}${row('Drawdown portefeuille',f2((S.peak-E)/S.peak*100)+' %')}</div>
+<h2>Stratégies</h2><div class="card"><div class="btns"><button class="${S.strat.mom?'':'s'}" data-a="st" data-v="mom">Momentum : ${S.strat.mom?'actif':'inactif'}</button><button class="${S.strat.rev?'':'s'}" data-a="st" data-v="rev">Retour à la moyenne : ${S.strat.rev?'actif':'inactif'}</button></div><div class="sm g">Aucune performance n'est présentée comme acquise : consultez les résultats réels de la simulation ci-dessus.</div></div>
+<h2>Derniers signaux</h2><div class="card">${sg.map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g">Aucun signal.</p>'}</div>
+<h2>Dernières opérations</h2><div class="card">${S.hist.slice(0,6).map(hrow).join('')||'<p class="g">Aucune.</p>'}</div>`},
+news(){let b='';if(NEWS=='load')b='<p class="g">Chargement…</p>';else if(NEWS=='err')b='<div class="bad">Actualités indisponibles (source injoignable). Aucune actualité n\'est inventée.</div>';else if(NEWS)b=NEWS.map(n=>`<div class="card"><b>${esc(n.title)}</b><div class="sm g">${esc(n.source)} · ${dt(n.published_on*1000)} · non vérifié par l'application</div>${/^https:\/\//.test(n.url)?`<a class="sm" style="color:var(--bl)" href="${esc(n.url)}" target="_blank" rel="noopener">Lire la source</a>`:''}</div>`).join('');
+ return`<div class="card sm g">Source : CryptoCompare (flux public, actualités crypto uniquement). Actualités actions : non connectées.</div><div class="btns"><button data-a="news">Actualiser</button></div>`+b},
+bt(){const r=BTR;const blk=(t,x)=>x?`<div class="card"><b>${t}</b>${row('Rendement net',`<span class="${cl(x.ret)}">${f2(x.ret)} %</span>`)}${row('Opérations',x.n)}${row('Taux de réussite',f2(x.wr,0)+' %')}${row('Profit factor',isFinite(x.pf)?f2(x.pf):'∞')}${row('Drawdown max',f2(x.dd)+' %')}${row('Gain moyen / perte moyenne',f2(x.aw)+' € / '+f2(x.al)+' €')}${row('Rendement / risque',x.dd?f2(x.ret/x.dd):'n/a')}</div>`:'';
+ return`<div class="card"><label>Actif</label><select data-b>${SY.map(s=>`<option ${s==BTS?'selected':''}>${s}</option>`).join('')}</select><div class="sm g" style="margin-top:8px">Stratégie : croisement de moyennes mobiles (long uniquement), bougies 1 h (1000 dernières), frais et slippage tirés des réglages. Les paramètres sont choisis sur les 70 % anciens, puis évalués une seule fois sur les 30 % récents jamais vus. Les signaux n'utilisent que des données passées.</div><div class="btns"><button data-a="bt">Lancer le test</button></div></div>`+(r=='load'?'<p class="g">Calcul…</p>':r=='err'?'<div class="bad">Données historiques indisponibles.</div>':r?`<div class="card sm g">${esc(r.sym)} · du ${r.from} au ${r.to} · MA ${r.f}/${r.s} choisies sur la période d'apprentissage</div>${blk('Apprentissage (70 %)',r.tr)}${blk('Test hors échantillon (30 %)',r.te)}<p class="g sm">Un résultat passé ne garantit rien. Un écart fort entre apprentissage et test signale un surapprentissage.</p>`:'')},
+log(){const ag=[...new Set(S.log.map(l=>l.a))];return`<select data-f><option value="">Tous les agents</option>${ag.map(a=>`<option ${a==LF?'selected':''}>${a}</option>`).join('')}</select><div class="card" style="margin-top:10px">${S.log.filter(l=>!LF||l.a==LF).slice(0,120).map(l=>`<div class="row sm"><span class="g">${dt(l.t)} · ${l.a} · ${l.ty}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g">Journal vide.</p>'}</div>`},
+set(){const F=[['risk','Risque max par opération (% du capital)'],['dayLoss','Perte journalière max (%)'],['dd','Drawdown max (%)'],['maxPos','Positions max'],['fee','Frais par ordre (%)'],['slip','Slippage (%)'],['stale','Péremption des données (secondes)'],['budget','Budget du Scalper (% du capital)'],['cd','Délai entre deux signaux par actif (s)']];
+ return`<div class="warn">Les données sont stockées uniquement dans ce navigateur et ne sont pas synchronisées entre vos appareils. Utilisez l'export pour sauvegarder. Aucune clé API n'est enregistrée.</div><div class="card">${F.map(f=>`<label>${f[1]}</label><input type="number" step="any" inputmode="decimal" data-c="${f[0]}" value="${S.cfg[f[0]]}">`).join('')}</div>
+<div class="card"><label>Capital virtuel initial (€) — appliqué à la réinitialisation</label><input id="cap" type="number" inputmode="decimal" value="${CAP}"><div class="btns"><button class="d" data-a="reset">Réinitialiser avec ce capital</button></div></div>
+<div class="card"><div class="btns"><button class="s" data-a="exp">Exporter la sauvegarde</button></div><label>Importer une sauvegarde</label><input id="imp" type="file" accept="application/json"></div>`}};
+function render(){$('main').innerHTML=PAGES[page]()}
+const ACT={
+em(){if(S.emerg){S.emerg=false;log('Admin','paramètre','Arrêt d\'urgence levé ; Scalper toujours arrêté')}else{S.emerg=true;S.scalp='stop';log('Admin','alerte','ARRÊT D\'URGENCE : nouvelles opérations bloquées, agents suspendus, positions conservées')}done()},
+pg(v){page=v;if(v=='news'&&!NEWS)return ACT.news();head();render();scrollTo(0,0)},
+sc(v){if(v=='run'&&(S.emerg||S.halt))return toast('Démarrage impossible : '+(S.emerg?'arrêt d\'urgence actif':S.halt));S.scalp=v;log('Scalper','état','Scalper : '+AG.on[v]);done()},
+closeall(){[...S.pos].forEach(x=>fresh(x.s)&&close(x,'fermeture manuelle',M[x.s].p));if(S.pos.length)toast('Certaines positions n\'ont pas pu être fermées : données périmées');done()},
+close(v){const x=S.pos.find(p=>p.id==v);if(x&&fresh(x.s))close(x,'fermeture manuelle',M[x.s].p);else toast('Donnée périmée : fermeture impossible');done()},
+st(v){S.strat[v]=!S.strat[v];log('Admin','paramètre','stratégie '+v+' = '+S.strat[v]);done()},
+unhalt(){const E=eq();S.halt=null;S.peak=E;S.dayStart=E;log('Admin','paramètre','Blocage levé, références réinitialisées à '+f2(E)+' €');done()},
+reset(){if(!confirm('Réinitialiser le portefeuille, l\'historique et le journal ?'))return;const c=S.cfg;S=DEF();S.cfg=c;S.init=S.cash=S.peak=S.dayStart=CAP>0?CAP:10000;CAP=S.init;S.eq=[];done()},
+exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download='ai-trading-central-'+new Date().toISOString().slice(0,10)+'.json';a.click()},
+news(){loadNews()},bt(){runBt()}};
+function done(){save();head();render()}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(b&&ACT[b.dataset.a])ACT[b.dataset.a](b.dataset.v)});
+document.addEventListener('change',e=>{const t=e.target,d=t.dataset;
+ if(d.c){if(!(+t.value>=0))return toast('Valeur invalide');S.cfg[d.c]=+t.value;log('Admin','paramètre',d.c+' = '+t.value);save()}
+ else if(d.f!==undefined){LF=t.value;render()}else if(d.b!==undefined)BTS=t.value;
+ else if(t.id=='cap')CAP=+t.value;
+ else if(t.id=='imp'&&t.files[0])t.files[0].text().then(x=>{try{const o=JSON.parse(x),d=DEF();S=Object.assign(d,o,{cfg:Object.assign(d.cfg,o.cfg)});done();toast('Sauvegarde importée')}catch(e){toast('Fichier invalide')}})});
+/* News Engine */
+async function loadNews(){NEWS='load';head();render();try{const j=await(await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN')).json();NEWS=j.Data.slice(0,15)}catch(e){NEWS='err'}render()}
+/* Backtesting Engine */
+function bt(c,f,s,fee,slip,cap){let cash=cap,q=0,ent=0,eqs=[],tr=[];const m=(i,n)=>{let t=0;for(let k=i-n+1;k<=i;k++)t+=c[k];return t/n};
+ for(let i=s+1;i<c.length;i++){const up=m(i-1,f)>m(i-1,s);
+  if(up&&!q){const px=c[i]*(1+slip);q=cash/(px*(1+fee));cash-=q*px*(1+fee);ent=px*(1+fee)}
+  else if(!up&&q){const px=c[i]*(1-slip),v=q*px*(1-fee);tr.push(v-q*ent);cash+=v;q=0}
+  eqs.push(cash+q*c[i])}
+ if(q){const v=q*c[c.length-1]*(1-slip)*(1-fee);tr.push(v-q*ent);cash+=v;eqs[eqs.length-1]=cash}
+ const w=tr.filter(x=>x>0),l=tr.filter(x=>x<=0),sw=w.reduce((a,b)=>a+b,0),sl=-l.reduce((a,b)=>a+b,0);let pk=cap,dd=0;eqs.forEach(v=>{pk=Math.max(pk,v);dd=Math.max(dd,(pk-v)/pk*100)});
+ return{ret:(cash/cap-1)*100,n:tr.length,wr:tr.length?w.length/tr.length*100:0,pf:sl?sw/sl:(sw?Infinity:0),dd,aw:w.length?sw/w.length:0,al:l.length?-sl/l.length:0}}
+async function runBt(){BTR='load';render();try{const k=await bj('/api/v3/klines?symbol='+BTS+'USDT&interval=1h&limit=1000'),c=k.map(x=>+x[4]),cut=Math.floor(c.length*.7),fe=S.cfg.fee/100,sp=S.cfg.slip/100;let best=null;
+ for(const f of[5,8,12,20])for(const s of[30,50,80]){const r=bt(c.slice(0,cut),f,s,fe,sp,S.init);if(!best||r.ret>best.r.ret)best={f,s,r}}
+ BTR={sym:BTS,f:best.f,s:best.s,tr:best.r,te:bt(c.slice(cut-best.s-1),best.f,best.s,fe,sp,S.init),from:new Date(k[0][0]).toLocaleDateString('fr-FR'),to:new Date(k[k.length-1][0]).toLocaleDateString('fr-FR')}}catch(e){BTR='err'}render()}
+/* Start */
+head();render();tick();setInterval(tick,10000);
+</script></body></html>
 
