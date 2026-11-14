@@ -38,10 +38,18 @@ nav button.on{color:var(--w);box-shadow:inset 0 -3px var(--bl)}
 const $=s=>document.querySelector(s),f2=(x,d=2)=>Number(x).toLocaleString('fr-FR',{minimumFractionDigits:d,maximumFractionDigits:d}),
 esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),cl=x=>x>=0?'up':'dn',
 dt=t=>new Date(t).toLocaleString('fr-FR'),SY=['BTC','ETH','SOL','XRP','BNB','ADA','DOGE'];
-const DEF=()=>({cash:10000,init:10000,pos:[],hist:[],log:[],eq:[],peak:10000,dayStart:10000,day:new Date().toDateString(),emerg:false,halt:null,scalp:'stop',opp:'stop',ostrat:{trend:true,brk:true,pull:true,rev:true,mom:true,rvs:true,vol:true},strat:{mom:true,rev:true,trend:true,brk:true,vol:true},ord:[],al:[],stk:{url:''},sp:{mom:{rsiLo:52,rsiHi:68,slM:1.5,tpM:2.5},rev:{rsiMax:30,slM:1.5,tpM:2},trend:{slM:2,tpM:4},brk:{vmin:1.5,slM:1.5,tpM:3},vol:{vx:1.6,slM:1.5,tpM:3}},n:0,
+const DEF=()=>({cash:10000,init:10000,pos:[],hist:[],log:[],eq:[],peak:10000,dayStart:10000,day:new Date().toDateString(),emerg:false,halt:null,scalp:'stop',opp:'stop',ostrat:{trend:true,brk:true,pull:true,rev:true,mom:true,rvs:true,vol:true},strat:{mom:true,rev:true,trend:true,brk:true,vol:true},ord:[],al:[],stk:{url:''},sp:{mom:{rsiLo:52,rsiHi:68,slM:1.5,tpM:2.5},rev:{rsiMax:30,slM:1.5,tpM:2},trend:{slM:2,tpM:4},brk:{vmin:1.5,slM:1.5,tpM:3},vol:{vx:1.6,slM:1.5,tpM:3}},n:0,ver:2,
 cfg:{risk:.25,dayLoss:1,dd:5,maxPos:5,fee:.1,slip:.05,stale:60,budget:40,cd:60,minScore:60,minRR:1.2,maxHr:12,ordMin:10,expMax:70,oppBudget:40,oppMax:3,oppMinScore:60,oppMinRR:1.3,oppCd:900}});
-function load(){try{const o=JSON.parse(localStorage.getItem('atc_v1'));if(o)return merge(o);}catch(e){}return null}
-function merge(o){const d=DEF();return Object.assign(d,o,{cfg:Object.assign(d.cfg,o.cfg),sp:Object.assign(d.sp,o.sp),strat:Object.assign(d.strat,o.strat),ostrat:Object.assign(d.ostrat,o.ostrat)})}
+const LIM={risk:[.01,2],dayLoss:[.1,10],dd:[1,30],maxPos:[1,20],fee:[0,1],slip:[0,1],stale:[10,300],budget:[0,100],cd:[0,3600],minScore:[50,95],minRR:[.5,5],maxHr:[1,60],ordMin:[1,120],expMax:[10,100],oppBudget:[0,100],oppMax:[1,10],oppMinScore:[50,95],oppMinRR:[.5,5],oppCd:[0,7200]},FIX=[];
+function load(){try{const raw=localStorage.getItem('atc_v1');if(!raw)return null;if(!localStorage.getItem('atc_v1_pre2'))localStorage.setItem('atc_v1_pre2',raw);const o=JSON.parse(raw);if(o&&typeof o=='object'&&!Array.isArray(o))return merge(o)}catch(e){FIX.push('Sauvegarde locale illisible : copie conservée dans atc_v1_pre2, démarrage avec les valeurs par défaut.')}return null}
+function merge(o){const d=DEF(),ob=x=>x&&typeof x=='object'&&!Array.isArray(x)?x:{};if((o.ver||1)<2)FIX.push('Ancienne sauvegarde (v1) migrée vers la version 2 : portefeuille, historique et transactions inchangés. Copie d\'origine conservée (atc_v1_pre2).');
+ Object.assign(d,o,{ver:2,cfg:Object.assign(d.cfg,ob(o.cfg)),sp:Object.assign(d.sp,ob(o.sp)),strat:Object.assign(d.strat,ob(o.strat)),ostrat:Object.assign(d.ostrat,ob(o.ostrat))});
+ ['pos','hist','log','eq','ord','al'].forEach(k=>{if(!Array.isArray(d[k])){d[k]=[];FIX.push('Données « '+k+' » corrompues : remises à vide')}});
+ ['init','cash','peak','dayStart'].forEach(k=>{if(!(d[k]>0)&&!(k=='cash'&&d[k]===0)){d[k]=k=='init'?10000:(d.init>0?d.init:10000);FIX.push('Valeur « '+k+' » invalide : corrigée')}});
+ fixCfg(d.cfg);const sp0=DEF().sp;for(const k in d.sp)for(const q in d.sp[k]){const v=d.sp[k][q];if(!(v>0&&v<1000)){d.sp[k][q]=(sp0[k]||{})[q]||1;FIX.push('Stratégie '+k+'.'+q+' invalide : valeur par défaut rétablie')}}return d}
+function fixCfg(c){const D0=DEF().cfg;for(const k in LIM){const v=c[k];if(typeof v!='number'||!isFinite(v)||v<LIM[k][0]||v>LIM[k][1]){FIX.push('Réglage « '+k+' » = '+v+' hors limites ['+LIM[k][0]+' – '+LIM[k][1]+'] : remplacé par '+D0[k]);c[k]=D0[k]}}}
+function flushFix(){if(!FIX.length)return;const m=FIX.splice(0);m.forEach(x=>log('Admin','paramètre',x));toast(m.length+' réglage(s) corrigé(s) automatiquement : voir Réglages.')}
+function snapCfg(){if(snapCfg.d)return;snapCfg.d=1;try{localStorage.setItem('atc_cfg_prev',JSON.stringify(S.cfg))}catch(e){}}
 function save(){try{localStorage.setItem('atc_v1',JSON.stringify(S))}catch(e){}}
 let S=load()||DEF(),M={},H={},FX=0,page='dash',NEWS=null,BTR=null,BTS='BTC',LF='',CAP=S.init,bad=null,CD={},lastOk=0;
 function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toast.h);toast.h=setTimeout(()=>t.style.display='none',5000)}
@@ -82,7 +90,7 @@ reserved=()=>S.ord.filter(o=>o.status=='open').reduce((t,o)=>t+(o.q-o.filled)*o.
 function risk(p){const c=S.cfg,E=eq(),R=[];
  if(S.emerg)R.push('arrêt d\'urgence actif');if(S.halt)R.push('limite atteinte : '+S.halt);
  if(!fresh(p.s))R.push('donnée périmée ou absente');
- if(!(p.q>0)||!(p.sl<p.entry&&p.entry<p.tp))R.push('paramètres d\'ordre invalides');
+ if(!(p.q>0&&isFinite(p.q)&&isFinite(p.entry)&&isFinite(p.sl)&&isFinite(p.tp)&&isFinite(p.rr)&&p.sl>0&&p.sl<p.entry&&p.entry<p.tp))R.push('prix incohérents (il faut SL < entrée < TP) : SL '+f2(p.sl,4)+' · entrée '+f2(p.entry,4)+' · TP '+f2(p.tp,4)+' · quantité '+f2(p.q,5));else if((p.entry-p.sl)/p.entry>.25)R.push('stop-loss à plus de 25 % de l\'entrée : volatilité mesurée incohérente');
  if(p.type=='limit'&&fresh(p.s)&&p.lim>=M[p.s].p)R.push('limite d\'achat au-dessus du marché');
  if(S.pos.length+S.ord.filter(o=>o.status=='open').length>=c.maxPos)R.push('nombre max de positions/ordres atteint');
  if(S.pos.some(x=>x.s==p.s)||S.ord.some(o=>o.s==p.s&&o.status=='open'))R.push('position ou ordre déjà ouvert sur '+p.s);
@@ -139,10 +147,10 @@ function scState(){if(S.emerg)return'Arrêt d\'urgence';if(S.scalp=='stop')retur
  if(!SY.some(s=>ind(s)))return'Collecte de données (aucune donnée exploitable)';
  if(Date.now()-D.sigT<20000&&D.sig)return'Analyse : '+D.sig+' signal(s) en évaluation';return S.pos.length?'En position ('+S.pos.length+')':'En attente d\'un signal'}
 function ST(k,d){const nf=SY.filter(s=>fresh(s)).length;if(S.emerg&&k!='Admin')return'Suspendu (arrêt d\'urgence)';
- if(k=='Analyst')return nf?`Actif · ${nf}/${SY.length} actifs à données fraîches`:'Inactif : aucune donnée fraîche';
- if(k=='Buyer'||k=='Supervisor')return (S.scalp=='run'||S.opp=='run')?'Actif (agents en marche)':'En veille (aucun agent démarré)';
- if(k=='Seller')return S.pos.length?`Actif · surveille ${S.pos.length} position(s)`:'En veille : aucune position';
- if(k=='Risk')return S.halt?'Blocage actif':'Prêt · contrôle chaque ordre';if(k=='Scalper')return scState();if(k=='Opportunity')return oppState();return d}
+ if(k=='Analyst')return !nf?'Données indisponibles':(S.scalp=='run'||S.opp=='run')?`Analyse en cours · ${nf}/${SY.length} actifs à données fraîches (cycle ${D.rc+OD.rc})`:'En attente : aucun agent démarré';
+ if(k=='Buyer'||k=='Supervisor'){const pr=D.prop+OD.prop;return pr?`Décision prise · ${pr} proposition(s), ${D.acc+OD.acc} acceptée(s), ${D.ref+OD.ref} refusée(s)`:'En attente : aucune proposition reçue'}
+ if(k=='Seller')return S.pos.length?`Surveille ${S.pos.length} position(s)`:'En attente : aucune position';
+ if(k=='Risk')return S.halt?'Blocage actif':'En attente · contrôle chaque ordre';if(k=='Scalper')return scState();if(k=='Opportunity')return oppState();return d}
 function scalper(){const now=Date.now(),c=S.cfg;
  if(S.emerg||S.halt||S.scalp!='run'){D.why=S.emerg?'arrêt d\'urgence actif':S.halt?'blocage : '+S.halt:'Scalper '+(S.scalp=='pause'?'suspendu':'arrêté')+' : aucune analyse';return}
  D.rc++;D.t=now;D.sym={};D.an=D.sig=0;const cand=[];
@@ -174,6 +182,7 @@ function selfTest(){const sv=S,mv=M,R=[],chk=(n,c,d)=>R.push({n,ok:!!c,d:d||''})
   M.TEST.p=100;supervise(mkp('TEST','market',0,98,104,10,'test'));M.TEST.p=97.5;monitor();h=S.hist[0];
   chk('Baisse fictive 97,50 € → stop-loss, perte calculée',h&&h.why=='stop-loss'&&h.pnl<0,'P&L '+(h?f2(h.pnl):'?')+' €');
   chk('Ordre trop risqué refusé',!supervise(mkp('TEST','market',0,90,104,100,'test')),S.log[0]?S.log[0].m:'');
+  chk('SL/TP incohérents (TP sous l\'entrée) refusés avec motif explicite',!supervise(mkp('TEST','market',0,66.5,66.8,10,'test'))&&/SL < entrée < TP/.test(S.log[0].m),S.log[0]?S.log[0].m:'');
   M.TEST.t=Date.now()-1e6;chk('Donnée périmée refusée',!supervise(mkp('TEST','market',0,98,104,10,'test')),'');M.TEST.t=Date.now();
   S.emerg=true;chk('Arrêt d\'urgence bloque les achats',!supervise(mkp('TEST','market',0,98,104,10,'test')),'')}
  catch(e){chk('Exécution du test',false,e.message)}finally{S=sv;M=mv}
@@ -187,7 +196,7 @@ function alerts(){const now=Date.now();S.al.forEach(a=>{if(!a.on||now-(a.last||0
  else if(a.ty=='vol'&&i&&i.a/i.p*100>=a.v)fire(a,'volatilité ATR '+f2(i.a/i.p*100,3)+' %');
  else if(a.ty=='buy'){const g=analyse(a.s);if(g.sig)fire(a,'signal '+g.sig+' (score '+g.conf+')')}
  else if(a.ty=='sell'){const x=S.pos.find(p=>p.s==a.s);if(x&&i&&SD[x.st]&&SD[x.st].x(i))fire(a,'signal de sortie sur position ouverte')}})}
-async function tick(){if(tick.b)return;tick.b=1;try{await pull();await pullHT();orders();monitor();limits();alerts();scalper();oppCycle();arbitrate();S.eq.push([Date.now(),eq()]);if(S.eq.length>500)S.eq.shift();save();head();if(!['set','bt','ord','alerts','stk','strat'].includes(page))render()}finally{tick.b=0}}
+async function tick(){if(tick.b)return;tick.b=1;try{TK=Date.now();await pull();await pullHT();orders();monitor();limits();alerts();scalper();oppCycle();arbitrate();S.eq.push([Date.now(),eq()]);if(S.eq.length>500)S.eq.shift();save();head();if(!['set','bt','ord','alerts','stk','strat'].includes(page))render()}finally{tick.b=0}}
 /* ===== UI ===== */
 const AG={on:{run:'En marche',pause:'Suspendu',stop:'Arrêté'}};
 const PG=[['dash','Accueil'],['agents','Agents'],['port','Portefeuille'],['set','Réglages'],['scalp','Scalper'],['opp','Opportunity'],['mkts','Marchés'],['news','Actus'],['strat','Stratégies'],['ord','Ordres'],['alerts','Alertes'],['stk','Actions'],['bt','Backtest'],['log','Journal']];
@@ -200,14 +209,14 @@ function banners(){return(S.emerg?'<div class="bad">Arrêt d\'urgence actif : au
 function stats(k,a){const h=S.hist.filter(x=>(!k||x.st==k)&&(!a||agOf(x)==a)),w=h.filter(x=>x.pnl>0),l=h.filter(x=>x.pnl<=0),sw=w.reduce((t,x)=>t+x.pnl,0),sl=l.reduce((t,x)=>t+x.pnl,0);return{n:h.length,sw,sl,net:sw+sl,fees:h.reduce((t,x)=>t+x.fees,0),wr:h.length?w.length/h.length*100:0}}
 const hrow=h=>`<div class="row"><span>${esc(h.s)} <span class="g sm">${AGN[agOf(h)]} · ${esc(h.why)} · ${dt(h.t)}</span></span><b class="${cl(h.pnl)}">${f2(h.pnl)} €</b></div>`;
 const PAGES={
-dash(){const E=eq(),st=stats(),run=S.scalp=='run'?1:0;return banners()+`<div class="grid">${card('Valeur du portefeuille',f2(E)+' €')}${card('Cash',f2(S.cash)+' €')}${card('Capital engagé',f2(engaged())+' €')}${card('Résultat total',f2(E-S.init)+' €',cl(E-S.init))}${card('Aujourd\'hui',f2(E-S.dayStart)+' €',cl(E-S.dayStart))}${card('Positions ouvertes',S.pos.length)}${card('Scalper',scState())}${card('Opportunity Trader',oppState())}${card('Drawdown',f2((S.peak-E)/S.peak*100)+' %')}</div>
-${oppCard()}<h2>Évolution du portefeuille</h2><div class="card">${chart(S.eq.slice(-200))}</div><h2>Dernières transactions</h2><div class="card">${S.hist.slice(0,5).map(hrow).join('')||'<p class="g">Aucune transaction. Démarrez le Scalper dans l\'onglet Scalper : il n\'ouvre une position que si une stratégie valide un signal (pas de transaction forcée).</p>'}</div>
+dash(){const E=eq(),st=stats(),run=S.scalp=='run'?1:0;return banners()+nowCard()+`<div class="grid">${card('Valeur du portefeuille',f2(E)+' €')}${card('Cash',f2(S.cash)+' €')}${card('Capital engagé',f2(engaged())+' €')}${card('Résultat total',f2(E-S.init)+' €',cl(E-S.init))}${card('Aujourd\'hui',f2(E-S.dayStart)+' €',cl(E-S.dayStart))}${card('Positions ouvertes',S.pos.length)}${card('Scalper',scState())}${card('Opportunity Trader',oppState())}${card('Drawdown',f2((S.peak-E)/S.peak*100)+' %')}</div>
+${oppCard()}<h2>Dernières activités</h2>${actCard()}<h2>Évolution du portefeuille</h2><div class="card">${chart(S.eq.slice(-200))}</div><h2>Dernières transactions</h2><div class="card">${S.hist.slice(0,5).map(hrow).join('')||'<p class="g">Aucune transaction. Démarrez le Scalper dans l\'onglet Scalper : il n\'ouvre une position que si une stratégie valide un signal (pas de transaction forcée).</p>'}</div>
 <p class="g sm">Simulation uniquement, aucun argent réel. Aucun bénéfice n\'est garanti. Les agents ne travaillent que lorsque cette page est ouverte.</p>`},
 agents(){const last=a=>{const l=S.log.find(x=>x.a==a);return l?esc(l.m):'<span class="g">aucune activité</span>'},E=eq();
- const A=[['Administrateur suprême','Contrôle total : capital, limites, arrêt d\'urgence.',S.emerg?'Arrêt d\'urgence':'Actif','Admin'],['AI Supervisor','Arbitre les propositions, consulte le Risk Engine, refuse ou autorise.',S.emerg?'Bloqué':'Actif','Supervisor'],
+ const A=[['Administrateur suprême','Contrôle total : capital, limites, arrêt d\'urgence.',S.emerg?'Arrêt d\'urgence':'Disponible','Admin'],['AI Supervisor','Arbitre les propositions, consulte le Risk Engine, refuse ou autorise.',S.emerg?'Bloqué':'Actif','Supervisor'],
  ['AI Analyst','RSI, MACD, Bollinger, ATR, volumes et moyennes sur bougies 1 min.',SY.every(s=>(H[s]||[]).length>=21)?'Actif':'Collecte de données','Analyst'],['AI News','Actualités crypto (CryptoCompare, non vérifiées).',NEWS&&NEWS!='err'&&NEWS!='load'?'Chargé':'Non chargé','News'],
  ['AI Buyer','Calcule taille, entrée, stop-loss, take-profit et frais.','Actif','Buyer'],['AI Seller','Stop-loss, take-profit, trailing stop, sortie à 20 min.','Actif','Seller'],['AI Risk Manager','Règles déterministes : risque, exposition, pertes, drawdown, données périmées.',S.halt?'Blocage actif':'Actif','Risk'],
- ['AI Portfolio Manager','Capital, cash, exposition : '+f2(engaged()/E*100)+' % engagé.','Actif','Portfolio'],['AI Scalper','Scalping adaptatif sur 7 cryptos.',AG.on[S.scalp],'Scalper'],['AI Opportunity Trader','Opportunités sur 5 min, 15 min, 1 h et 4 h : 7 stratégies, positions de plusieurs heures, vente partielle et stop suiveur.',AG.on[S.opp],'Opportunity']];
+ ['AI Portfolio Manager','Capital, cash, exposition : '+f2(engaged()/E*100)+' % engagé.','Surveille le capital','Portfolio'],['AI Scalper','Scalping adaptatif sur 7 cryptos.',AG.on[S.scalp],'Scalper'],['AI Opportunity Trader','Opportunités sur 5 min, 15 min, 1 h et 4 h : 7 stratégies, positions de plusieurs heures, vente partielle et stop suiveur.',AG.on[S.opp],'Opportunity']];
  A.forEach(a=>a[2]=ST(a[3],a[2]));return banners()+diag()+oppCard()+oppDiag()+A.map(a=>`<div class="card"><div class="row" style="padding-top:0"><b>${a[0]}</b><span class="g">${a[2]}</span></div><div class="sm g">${a[1]}</div><div class="sm" style="margin-top:6px">Dernière action : ${last(a[3])}</div></div>`).join('')+
  `<h2>Échanges entre agents</h2><div class="card">${S.log.filter(l=>['analyse','proposition','validation','accord','refus','exécution','fermeture'].includes(l.ty)).slice(0,14).map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')} · ${l.a}</span><span class="${l.ty=='refus'?'dn':''}">${esc(l.m)}</span></div>`).join('')||'<p class="g">Aucun échange pour l\'instant.</p>'}</div>`},
 port(){const pl=S.pos.map(x=>M[x.s]?(M[x.s].p-x.e)*x.q:0),ug=pl.filter(v=>v>0).reduce((a,b)=>a+b,0),ul=pl.filter(v=>v<0).reduce((a,b)=>a+b,0),ob=S.ord.find(o=>o.filled>0),hs=S.hist[0],lb=ob?`${ob.s} ${f2(ob.filled,5)} @ ${f2(ob.type=='limit'?ob.lim:ob.entry,4)} € · ${dt(ob.t)}`:'aucun',ls=hs?`${hs.s} @ ${f2(hs.x,4)} € · ${hs.why} · <span class="${cl(hs.pnl)}">${f2(hs.pnl)} €</span>`:'aucune',E=eq(),st=stats(),unr=S.pos.reduce((t,x)=>t+(M[x.s]?(M[x.s].p-x.e)*x.q:0),0);
@@ -228,8 +237,9 @@ bt(){const r=BTR;const blk=(t,x)=>x?`<div class="card"><b>${t}</b>${row('Rendeme
  return`<div class="card"><label>Actif</label><select data-b>${SY.map(s=>`<option ${s==BTS?'selected':''}>${s}</option>`).join('')}</select><div class="sm g" style="margin-top:8px">Stratégie : croisement de moyennes mobiles (long uniquement), bougies 1 h (1000 dernières), frais et slippage tirés des réglages. Les paramètres sont choisis sur les 70 % anciens, puis évalués une seule fois sur les 30 % récents jamais vus. Les signaux n'utilisent que des données passées.</div><div class="btns"><button data-a="bt">Lancer le test</button></div></div>`+(r=='load'?'<p class="g">Calcul…</p>':r=='err'?'<div class="bad">Données historiques indisponibles.</div>':r?`<div class="card sm g">${esc(r.sym)} · du ${r.from} au ${r.to} · MA ${r.f}/${r.s} choisies sur la période d'apprentissage</div>${blk('Apprentissage (70 %)',r.tr)}${blk('Test hors échantillon (30 %)',r.te)}<p class="g sm">Un résultat passé ne garantit rien. Un écart fort entre apprentissage et test signale un surapprentissage.</p>`:'')},
 log(){const ag=[...new Set(S.log.map(l=>l.a))];return`<select data-f><option value="">Tous les agents</option>${ag.map(a=>`<option ${a==LF?'selected':''}>${a}</option>`).join('')}</select><div class="card" style="margin-top:10px">${S.log.filter(l=>!LF||l.a==LF).slice(0,120).map(l=>`<div class="row sm"><span class="g">${dt(l.t)} · ${l.a} · ${l.ty}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g">Journal vide.</p>'}</div>`},
 set(){const F=[['risk','Risque max par opération (% du capital)'],['dayLoss','Perte journalière max (%)'],['dd','Drawdown max (%)'],['maxPos','Positions max'],['fee','Frais par ordre (%)'],['slip','Slippage (%)'],['stale','Péremption des données (secondes)'],['budget','Budget du Scalper (% du capital)'],['cd','Délai entre deux signaux par actif (s)'],['minScore','Score minimal d\'un signal (50-95)'],['minRR','Rendement/risque net minimal'],['maxHr','Transactions max par heure'],['ordMin','Expiration des ordres limites (min)'],['expMax','Exposition totale max (% du capital)'],['oppBudget','Budget Opportunity Trader (% du capital)'],['oppMax','Positions max Opportunity Trader'],['oppMinScore','Score minimal Opportunity (50-95)'],['oppMinRR','Rendement/risque net minimal Opportunity'],['oppCd','Délai entre deux signaux Opportunity par actif (s)']];
- return`<div class="warn">Les données sont stockées uniquement dans ce navigateur et ne sont pas synchronisées entre vos appareils. Utilisez l'export pour sauvegarder. Aucune clé API n'est enregistrée.</div><div class="card">${F.map(f=>`<label>${f[1]}</label><input type="number" step="any" inputmode="decimal" data-c="${f[0]}" value="${S.cfg[f[0]]}">`).join('')}</div>
-<div class="card"><label>Capital virtuel initial (€) — appliqué à la réinitialisation</label><input id="cap" type="number" inputmode="decimal" value="${CAP}"><div class="btns"><button class="d" data-a="reset">Réinitialiser avec ce capital</button></div></div>
+ return`<div class="warn">Les données sont stockées uniquement dans ce navigateur et ne sont pas synchronisées entre vos appareils. Utilisez l'export pour sauvegarder. Aucune clé API n'est enregistrée.</div><div class="card">${F.map(f=>`<label>${f[1]} <span class="g sm">[${LIM[f[0]][0]} – ${LIM[f[0]][1]}] · recommandé : ${DEF().cfg[f[0]]}</span></label><input type="number" step="any" inputmode="decimal" min="${LIM[f[0]][0]}" max="${LIM[f[0]][1]}" data-c="${f[0]}" value="${S.cfg[f[0]]}">`).join('')}</div>
+<div class="card"><b>Commandes des réglages</b><div class="sm g">Le portefeuille, l'historique et les transactions ne sont jamais touchés par ces deux boutons. Une valeur hors limites est refusée (ex. 0,10 % ne peut jamais devenir 10 %).</div><div class="btns"><button class="s" data-a="cfgdef">Réinitialiser les réglages (valeurs recommandées)</button><button class="s" data-a="cfgprev">Restaurer les réglages précédents</button></div>${S.log.filter(l=>l.ty=='paramètre'&&/remplacé|corrig|migr|invalide|illisible/.test(l.m)).slice(0,5).map(l=>`<div class="sm warn">${dt(l.t)} · ${esc(l.m)}</div>`).join('')}</div>
+<div class="card"><label>Capital virtuel initial (€) — appliqué à la réinitialisation</label><input id="cap" type="number" inputmode="decimal" value="${CAP}"><div class="btns"><button class="d" data-a="reset">Réinitialiser entièrement la simulation (avec ce capital)</button></div></div>
 <div class="card"><div class="btns"><button class="s" data-a="exp">Exporter la sauvegarde</button></div><label>Importer une sauvegarde</label><input id="imp" type="file" accept="application/json"></div>`}};
 function render(){$('main').innerHTML=PAGES[page]()}
 const ACT={
@@ -243,12 +253,12 @@ unhalt(){const E=eq();S.halt=null;S.peak=E;S.dayStart=E;log('Admin','paramètre'
 reset(){if(!confirm('Réinitialiser le portefeuille, l\'historique et le journal ?'))return;const c=S.cfg;S=DEF();S.cfg=c;S.init=S.cash=S.peak=S.dayStart=CAP>0?CAP:10000;CAP=S.init;S.eq=[];done()},
 exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download='ai-trading-central-'+new Date().toISOString().slice(0,10)+'.json';a.click()},
 news(){loadNews()},bt(){runBt()},selftest(){selfTest();done()}};
-function done(){save();head();render()}
+function done(){flushFix();save();head();render()}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(b&&ACT[b.dataset.a])ACT[b.dataset.a](b.dataset.v)});
 document.addEventListener('change',e=>{const t=e.target,d=t.dataset;
- if(d.c){if(!(+t.value>=0))return toast('Valeur invalide');S.cfg[d.c]=+t.value;log('Admin','paramètre',d.c+' = '+t.value);save()}
+ if(d.c){const v=+t.value,L=LIM[d.c];if(t.value===''||!isFinite(v)||v<L[0]||v>L[1]){t.value=S.cfg[d.c];return toast('Valeur refusée : ce réglage doit être entre '+L[0]+' et '+L[1]+'. Ancienne valeur conservée ('+S.cfg[d.c]+').')}snapCfg();S.cfg[d.c]=v;log('Admin','paramètre',d.c+' = '+v);save()}
  else if(d.p){const[k,q]=d.p.split('.');if(!(+t.value>0))return toast('Valeur invalide');S.sp[k][q]=+t.value;log('Admin','paramètre',k+'.'+q+' = '+t.value);save()}else if(d.f!==undefined){LF=t.value;render()}else if(d.b!==undefined)BTS=t.value;
- else if(t.id=='cap')CAP=+t.value;else if(t.id=='stu'){S.stk.url=t.value.trim();save()}
+ else if(t.id=='cap'){const v=+t.value;if(v>=100&&v<=1e7)CAP=v;else{t.value=CAP;toast('Capital : entre 100 et 10 000 000 €')}}else if(t.id=='stu'){S.stk.url=t.value.trim();save()}
  else if(t.id=='imp'&&t.files[0])t.files[0].text().then(x=>{try{S=merge(JSON.parse(x));done();toast('Sauvegarde importée')}catch(e){toast('Fichier invalide')}})});
 /* News Engine */
 async function loadNews(){NEWS='load';head();render();try{const j=await(await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN')).json();NEWS=j.Data.slice(0,15)}catch(e){NEWS='err'}render()}
@@ -374,6 +384,23 @@ function selfTestO(){const sv=S,mv=M,ov=OD,R=[],chk=(n,c,d)=>R.push({n,ok:!!c,d:
  catch(e){chk('Exécution du test',false,e.message)}finally{S=sv;M=mv;OD=ov}
  (S.testsO=S.testsO||[]).unshift({t:Date.now(),ok:R.every(r=>r.ok),R});S.testsO.length=Math.min(S.testsO.length,3)}
 
+/* ===== Phase 2 : activité en direct ===== */
+let TK=0;
+function nowTxt(){const A=[];if(S.emerg)return'Arrêt d\'urgence actif : agents suspendus, aucune nouvelle opération. Les positions ouvertes sont conservées.';
+ if(S.halt)return'Blocage du Risk Manager : '+S.halt+'. Aucun achat tant que le blocage n\'est pas levé.';
+ if(bad)return'Données Binance indisponibles : les agents attendent le retour des cours. Aucune opération possible.';
+ if(S.scalp!='run'&&S.opp!='run')return'Aucun agent n\'est démarré : le bot suit les prix et surveille '+S.pos.length+' position(s) ouverte(s), mais n\'analyse rien. Démarrez AI Scalper ou AI Opportunity Trader depuis leurs onglets.';
+ if(S.scalp=='run')A.push(D.rc?`AI Scalper : cycle n°${D.rc}, ${D.an}/${SY.length} actifs analysés, ${D.sig} signal(s). ${D.why?'Pas d\'achat car : '+D.why+'.':'Proposition en cours d\'examen par le Supervisor.'}`:'AI Scalper démarre : en attente des premières données.');
+ if(S.opp=='run')A.push(OD.rc?`AI Opportunity Trader : cycle n°${OD.rc}, ${OD.an}/${SY.length} actifs analysés, ${OD.sig} opportunité(s). ${OD.why?'Pas d\'achat car : '+OD.why+'.':'Proposition en cours d\'examen par le Supervisor.'}`:'AI Opportunity Trader démarre : collecte des bougies 5 min à 4 h.');
+ if(S.pos.length)A.push(`AI Seller surveille ${S.pos.length} position(s) (stop-loss, take-profit, stop suiveur).`);
+ return A.join(' ')}
+function nowState(){if(S.emerg||S.halt)return'Système suspendu';if(bad)return'Données indisponibles';if(S.scalp!='run'&&S.opp!='run')return'Système suspendu : aucun agent démarré';return(Date.now()-D.sigT<20000&&D.sig)||(Date.now()-OD.sigT<20000&&OD.sig)?'Opportunité détectée':'En attente de signal'}
+function nowCard(){const cy=D.rc+OD.rc,pr=D.prop+OD.prop;return`<div class="card"><div class="row" style="padding-top:0"><b>CE QUE FAIT LE BOT MAINTENANT</b><b>${nowState()}</b></div><div class="sm">${esc(nowTxt())}</div><div style="height:6px;background:#1677ff22;border-radius:3px;margin:10px 0 4px"><div id="pb" style="height:6px;border-radius:3px;background:var(--bl);width:0"></div></div><div class="sm g">Prochain cycle dans <span id="cdn">–</span> s · ${cy} cycle(s) · ${SY.length} actifs surveillés · ${pr} proposition(s) · ${D.acc+OD.acc} acceptée(s) · ${D.ref+OD.ref} refusée(s) · ${S.pos.length} position(s) ouverte(s)</div><div class="sm g" style="margin-top:4px">Les agents ne travaillent que lorsque cette page est ouverte et active.</div></div>`}
+function actCard(){return'<div class="card">'+(S.log.slice(0,8).map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')} · ${esc(l.a)}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g">Aucune activité enregistrée.</p>')+'</div>'}
+setInterval(()=>{const e=$('#cdn');if(!e||!TK)return;const r=Math.max(0,10-(Date.now()-TK)/1000);e.textContent=Math.ceil(r);const b=$('#pb');if(b)b.style.width=Math.min(100,(10-r)*10)+'%'},1000);
+/* ===== Phase 2 : commandes de réglages ===== */
+ACT.cfgdef=()=>{if(!confirm('Remettre tous les réglages aux valeurs recommandées ? Portefeuille et historique sont conservés.'))return;try{localStorage.setItem('atc_cfg_prev',JSON.stringify(S.cfg))}catch(e){}S.cfg=DEF().cfg;log('Admin','paramètre','Réglages réinitialisés aux valeurs recommandées');done()};
+ACT.cfgprev=()=>{try{const o=JSON.parse(localStorage.getItem('atc_cfg_prev'));if(!o||typeof o!='object')throw 0;const cur=S.cfg;S.cfg=Object.assign(DEF().cfg,o);fixCfg(S.cfg);localStorage.setItem('atc_cfg_prev',JSON.stringify(cur));log('Admin','paramètre','Réglages précédents restaurés');done()}catch(e){toast('Aucun réglage précédent disponible')}};
 /* Start */
-head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
+flushFix();head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script></body></html>
