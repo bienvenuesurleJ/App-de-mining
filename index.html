@@ -39,8 +39,8 @@ const $=s=>document.querySelector(s),f2=(x,d=2)=>Number(x).toLocaleString('fr-FR
 esc=s=>String(s).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),cl=x=>x>=0?'up':'dn',
 dt=t=>new Date(t).toLocaleString('fr-FR'),SY=['BTC','ETH','SOL','XRP','BNB','ADA','DOGE'];
 const DEF=()=>({cash:10000,init:10000,pos:[],hist:[],log:[],eq:[],peak:10000,dayStart:10000,day:new Date().toDateString(),emerg:false,halt:null,scalp:'stop',opp:'stop',ostrat:{trend:true,brk:true,pull:true,rev:true,mom:true,rvs:true,vol:true},strat:{mom:true,rev:true,trend:true,brk:true,vol:true},ord:[],al:[],stk:{url:''},sp:{mom:{rsiLo:52,rsiHi:68,slM:1.5,tpM:2.5},rev:{rsiMax:30,slM:1.5,tpM:2},trend:{slM:2,tpM:4},brk:{vmin:1.5,slM:1.5,tpM:3},vol:{vx:1.6,slM:1.5,tpM:3}},n:0,ver:2,
-cfg:{risk:.25,dayLoss:1,dd:5,maxPos:5,fee:.1,slip:.05,stale:60,budget:40,cd:60,minScore:60,minRR:1.2,maxHr:12,ordMin:10,expMax:70,oppBudget:40,oppMax:3,oppMinScore:60,oppMinRR:1.3,oppCd:900}});
-const LIM={risk:[.01,2],dayLoss:[.1,10],dd:[1,30],maxPos:[1,20],fee:[0,1],slip:[0,1],stale:[10,300],budget:[0,100],cd:[0,3600],minScore:[50,95],minRR:[.5,5],maxHr:[1,60],ordMin:[1,120],expMax:[10,100],oppBudget:[0,100],oppMax:[1,10],oppMinScore:[50,95],oppMinRR:[.5,5],oppCd:[0,7200]},FIX=[];
+cfg:{risk:.25,dayLoss:1,dd:5,maxPos:5,fee:.1,slip:.05,stale:60,budget:40,cd:60,minScore:60,minRR:1.2,maxHr:12,ordMin:10,expMax:70,oppBudget:40,oppMax:3,oppMinScore:60,oppMinRR:1.3,oppCd:900,newsMax:10,newsHrs:6,newsMin:5,newsVeto:1,maxAsset:25,trailAct:.4,trail:.3,timeExit:20,partFr:50,partR:1.5,beR:1,logMax:400,fs:15}});
+const LIM={risk:[.01,2],dayLoss:[.1,10],dd:[1,30],maxPos:[1,20],fee:[0,1],slip:[0,1],stale:[10,300],budget:[0,100],cd:[0,3600],minScore:[50,95],minRR:[.5,5],maxHr:[1,60],ordMin:[1,120],expMax:[10,100],oppBudget:[0,100],oppMax:[1,10],oppMinScore:[50,95],oppMinRR:[.5,5],oppCd:[0,7200],newsMax:[0,20],newsHrs:[1,24],newsMin:[1,60],newsVeto:[0,1],maxAsset:[5,50],trailAct:[.1,5],trail:[.05,3],timeExit:[1,240],partFr:[10,90],partR:[.5,5],beR:[.5,3],logMax:[100,1000],fs:[12,20]},FIX=[];
 function load(){try{const raw=localStorage.getItem('atc_v1');if(!raw)return null;if(!localStorage.getItem('atc_v1_pre2'))localStorage.setItem('atc_v1_pre2',raw);const o=JSON.parse(raw);if(o&&typeof o=='object'&&!Array.isArray(o))return merge(o)}catch(e){FIX.push('Sauvegarde locale illisible : copie conservée dans atc_v1_pre2, démarrage avec les valeurs par défaut.')}return null}
 function merge(o){const d=DEF(),ob=x=>x&&typeof x=='object'&&!Array.isArray(x)?x:{};if((o.ver||1)<2)FIX.push('Ancienne sauvegarde (v1) migrée vers la version 2 : portefeuille, historique et transactions inchangés. Copie d\'origine conservée (atc_v1_pre2).');
  Object.assign(d,o,{ver:2,cfg:Object.assign(d.cfg,ob(o.cfg)),sp:Object.assign(d.sp,ob(o.sp)),strat:Object.assign(d.strat,ob(o.strat)),ostrat:Object.assign(d.ostrat,ob(o.ostrat))});
@@ -54,7 +54,9 @@ function save(){try{localStorage.setItem('atc_v1',JSON.stringify(S))}catch(e){}}
 let S=load()||DEF(),M={},H={},FX=0,page='dash',NEWS=null,BTR=null,BTS='BTC',LF='',CAP=S.init,bad=null,CD={},lastOk=0;
 function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toast.h);toast.h=setTimeout(()=>t.style.display='none',5000)}
 /* Audit Engine */
-function log(a,ty,m){S.log.unshift({t:Date.now(),a,ty,m});if(S.log.length>400)S.log.length=400;if(ty=='alerte')toast(m)}
+const SYRE=new RegExp('\\b('+SY.join('|')+')\\b');
+function log(a,ty,m){const x=String(m).match(SYRE);S.log.unshift({t:Date.now(),a,ty,m,s:x?x[1]:''});const mx=(S.cfg&&S.cfg.logMax)||400;if(S.log.length>mx)S.log.length=mx;const c=(S.ac=S.ac||{})[a]=S.ac[a]||{};c[ty]=(c[ty]||0)+1;c.t=Date.now();
+ if(a=='Supervisor'&&ty=='refus'){const r=String(m).split(' refusé : ')[1];if(r){S.rj=S.rj||{};r.split(', ').forEach(q=>{const k=q.replace(/[\d.,]+/g,'#');S.rj[k]=(S.rj[k]||0)+1})}}if(ty=='alerte')toast(m)}
 /* ===== Market Data Engine (Binance : tickers + bougies 1 min OHLCV) ===== */
 const BS=['https://data-api.binance.vision','https://api.binance.com'];
 async function bj(p){for(const b of BS){const c=new AbortController(),h=setTimeout(()=>c.abort(),8000);try{const r=await fetch(b+p,{signal:c.signal});if(r.ok)return await r.json()}catch(e){}finally{clearTimeout(h)}}throw new Error('indisponible')}
@@ -95,7 +97,7 @@ function risk(p){const c=S.cfg,E=eq(),R=[];
  if(S.pos.length+S.ord.filter(o=>o.status=='open').length>=c.maxPos)R.push('nombre max de positions/ordres atteint');
  if(S.pos.some(x=>x.s==p.s)||S.ord.some(o=>o.s==p.s&&o.status=='open'))R.push('position ou ordre déjà ouvert sur '+p.s);
  if(p.risk>E*c.risk/100*1.001)R.push('risque '+f2(p.risk)+' € > limite '+f2(E*c.risk/100)+' €');
- if(p.cost>E*.25)R.push('exposition par actif > 25 %');if(engaged()+p.cost>E*c.expMax/100)R.push('exposition totale > '+c.expMax+' % du capital');if(agOf(p)=='opp'&&S.pos.filter(x=>agOf(x)=='opp').length+S.ord.filter(o=>o.status=='open'&&agOf(o)=='opp').length>=c.oppMax)R.push('nombre max de positions Opportunity atteint');
+ if(p.cost>E*c.maxAsset/100)R.push('exposition par actif > '+c.maxAsset+' %');if(engaged()+p.cost>E*c.expMax/100)R.push('exposition totale > '+c.expMax+' % du capital');if(agOf(p)=='opp'&&S.pos.filter(x=>agOf(x)=='opp').length+S.ord.filter(o=>o.status=='open'&&agOf(o)=='opp').length>=c.oppMax)R.push('nombre max de positions Opportunity atteint');
  if(p.cost+p.fee>S.cash-reserved())R.push('cash insuffisant');
  if(p.rr<c.minRR)R.push('rendement/risque net '+f2(p.rr)+' < '+c.minRR+' (frais et slippage inclus)');
  return R}
@@ -122,9 +124,9 @@ function close(x,why,px){const c=S.cfg,ex=px*(1-c.slip/100),pr=x.q*ex,fee=pr*c.f
  S.al.forEach(a=>{if(a.on&&a.s==x.s&&((a.ty=='sl'&&/stop/.test(why))||(a.ty=='tp'&&why=='take-profit')))fire(a,why+' exécuté, P&L '+f2(pnl)+' €')})}
 /* Seller Engine */
 function monitor(){[...S.pos].forEach(x=>{if(!fresh(x.s))return;if(agOf(x)=='opp')return oppMon(x);const p=M[x.s].p;x.hi=Math.max(x.hi,p);
- if(p>x.e*1.004)x.sl=Math.max(x.sl,x.hi*.997);
+ if(p>x.e*(1+S.cfg.trailAct/100))x.sl=Math.max(x.sl,x.hi*(1-S.cfg.trail/100));
  if(p<=x.sl)close(x,x.sl>x.e?'trailing stop':'stop-loss',p);else if(p>=x.tp)close(x,'take-profit',p);
- else if(Date.now()-x.t>20*60000)close(x,'sortie temporelle 20 min',p);
+ else if(Date.now()-x.t>S.cfg.timeExit*60000)close(x,'sortie temporelle '+S.cfg.timeExit+' min',p);
  else{const i=ind(x.s);if(i&&SD[x.st]&&Date.now()-x.t>60000&&SD[x.st].x(i))close(x,'signal de sortie',p)}})}
 /* Buyer Engine */
 function buyer(a){const c=S.cfg,E=eq(),i=a.i,P=S.sp[a.st],p=M[a.s].p,sl=p-P.slM*i.a,tp=p+P.tpM*i.a,lim=a.st=='rev'?p-.3*i.a:0,ep=lim||p*(1+c.slip/100),f=c.fee/100,rpu=ep-sl+ep*(2*f+c.slip/100);
@@ -133,7 +135,7 @@ function buyer(a){const c=S.cfg,E=eq(),i=a.i,P=S.sp[a.st],p=M[a.s].p,sl=p-P.slM*
 /* AI Supervisor : toute proposition passe ici puis par le Risk Engine */
 function supervise(p,xr){const ao=agOf(p)=='opp',Dd=ao?OD:D,t=p.st!='test',nm=ao?(OSD[p.st.slice(2)]||{n:p.st}).n:(SD[p.st]?SD[p.st].n:p.st);if(t)Dd.prop++;
  log(ao?'Opportunity':'Buyer','proposition',`${p.s} ${p.type} (${nm}) entrée ${f2(p.entry,4)} SL ${f2(p.sl,4)} TP ${f2(p.tp,4)} qté ${f2(p.q,5)} R/R net ${f2(p.rr)} · potentiel net ${f2(p.q*(p.tp-p.entry-p.entry*(2*S.cfg.fee/100+S.cfg.slip/100)))} €`);
- const R=risk(p);if(p.cost<10)R.push('montant < 10 €');if(t&&p.st!='manuel'&&S.newsOn!==false&&newsImpact(p.s).veto)R.push('AI News : actualité négative importante et récente sur '+p.s+' (non vérifiée) — achat suspendu par prudence');if(xr)R.push(xr);
+ const R=risk(p);if(p.cost<10)R.push('montant < 10 €');if(t&&p.st!='manuel'&&S.newsOn!==false&&S.cfg.newsVeto&&newsImpact(p.s).veto)R.push('AI News : actualité négative importante et récente sur '+p.s+' (non vérifiée) — achat suspendu par prudence');if(xr)R.push(xr);
  if(R.length){log('Supervisor','refus',p.s+' refusé : '+R.join(', '));if(t){Dd.ref++;Dd.lr=R.join(', ');R.forEach(r=>{const k=r.replace(/[\d.,]+/g,'#');Dd.rej[k]=(Dd.rej[k]||0)+1})}order(p,R);return false}
  log('Risk','validation',p.s+' : risque '+f2(p.risk)+' € dans les limites');log('Supervisor','accord',p.s+' autorisé');if(t)Dd.acc++;order(p);return true}
 /* AI Scalper Engine */
@@ -200,7 +202,7 @@ async function tick(){if(tick.b)return;tick.b=1;try{TK=Date.now();await pull();a
 /* ===== UI ===== */
 const AG={on:{run:'En marche',pause:'Suspendu',stop:'Arrêté'}};
 const PG=[['dash','Accueil'],['agents','Agents'],['port','Portefeuille'],['set','Réglages'],['scalp','Scalper'],['opp','Opportunity'],['mkts','Marchés'],['news','Actus'],['strat','Stratégies'],['ord','Ordres'],['alerts','Alertes'],['stk','Actions'],['bt','Backtest'],['log','Journal']];
-function head(){const E=eq();$('header').innerHTML=`<h1>AI Trading Central <span>BlackBlue</span><div class="sm g" style="font-weight:400">Scalper : ${scState()} · Opportunity : ${oppState()}</div></h1><b>${f2(E)} €</b><span class="${cl(E-S.init)} sm">${f2((E-S.init)/S.init*100)} %</span><button class="${S.emerg?'s':'d'}" data-a="em">${S.emerg?'Lever l\'arrêt':'Arrêt d\'urgence'}</button>`;
+function head(){const E=eq();if(document.body)document.body.style.fontSize=(S.cfg.fs||15)+'px';$('header').innerHTML=`<h1>AI Trading Central <span>BlackBlue</span><div class="sm g" style="font-weight:400">Scalper : ${scState()} · Opportunity : ${oppState()}</div></h1><b>${f2(E)} €</b><span class="${cl(E-S.init)} sm">${f2((E-S.init)/S.init*100)} %</span><button class="${S.emerg?'s':'d'}" data-a="em">${S.emerg?'Lever l\'arrêt':'Arrêt d\'urgence'}</button>`;
  $('nav').innerHTML=PG.map(p=>`<button class="${p[0]==page?'on':''}" data-a="pg" data-v="${p[0]}">${p[1]}</button>`).join('')}
 const row=(l,v)=>`<div class="row"><span class="g">${l}</span><b>${v}</b></div>`,card=(l,v,c='')=>`<div class="card"><div class="g sm">${l}</div><div class="big ${c}">${v}</div></div>`;
 function chart(a){if(a.length<2)return'<p class="g">Courbe en construction (un point toutes les 10 s).</p>';const w=600,h=150,v=a.map(x=>x[1]),lo=Math.min(...v),hi=Math.max(...v),r=hi-lo||1;
@@ -255,7 +257,7 @@ exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([J
 news(){loadNews()},bt(){runBt()},selftest(){selfTest();done()}};
 function done(){flushFix();save();head();render()}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(b&&ACT[b.dataset.a])ACT[b.dataset.a](b.dataset.v)});
-document.addEventListener('change',e=>{const t=e.target,d=t.dataset;
+document.addEventListener('change',e=>{const t=e.target,d=t.dataset;if(d.k)return setPrm(t);if(d.cf){CF[d.cf]=t.value;return render()}
  if(d.c){const v=+t.value,L=LIM[d.c];if(t.value===''||!isFinite(v)||v<L[0]||v>L[1]){t.value=S.cfg[d.c];return toast('Valeur refusée : ce réglage doit être entre '+L[0]+' et '+L[1]+'. Ancienne valeur conservée ('+S.cfg[d.c]+').')}snapCfg();S.cfg[d.c]=v;log('Admin','paramètre',d.c+' = '+v);save()}
  else if(d.p){const[k,q]=d.p.split('.');if(!(+t.value>0))return toast('Valeur invalide');S.sp[k][q]=+t.value;log('Admin','paramètre',k+'.'+q+' = '+t.value);save()}else if(d.f!==undefined){LF=t.value;render()}else if(d.b!==undefined)BTS=t.value;
  else if(t.id=='cap'){const v=+t.value;if(v>=100&&v<=1e7)CAP=v;else{t.value=CAP;toast('Capital : entre 100 et 10 000 000 €')}}else if(t.id=='stu'){S.stk.url=t.value.trim();save()}
@@ -338,8 +340,8 @@ function partial(x,fr,why,px){const c=S.cfg,q=x.q*fr,ex=px*(1-c.slip/100),pr=q*e
 function oppMon(x){const p=M[x.s].p,c=S.cfg,k=x.e*(2*c.fee/100+c.slip/100);x.hi=Math.max(x.hi,p);const R=x.r0||(x.r0=x.e-x.sl);
  if(p<=x.sl)return close(x,x.sl>x.e+k?'trailing stop':x.sl>=x.e?'stop au seuil de rentabilité':'stop-loss',p);
  if(p>=x.tp)return close(x,'take-profit',p);
- if(p>=x.e+R&&x.sl<x.e+k){x.sl=x.e+k;log('Opportunity','protection',`${x.s} stop remonté au seuil de rentabilité ${f2(x.sl,4)} €`)}
- if(p>=x.e+1.5*R&&!x.part&&x.q*p>=20)partial(x,.5,'vente partielle (+1,5 R)',p);
+ if(p>=x.e+c.beR*R&&x.sl<x.e+k){x.sl=x.e+k;log('Opportunity','protection',`${x.s} stop remonté au seuil de rentabilité ${f2(x.sl,4)} €`)}
+ if(p>=x.e+c.partR*R&&!x.part&&x.q*p>=20)partial(x,c.partFr/100,'vente partielle (+'+c.partR+' R)',p);
  if(x.part&&x.a){const t=x.hi-1.5*x.a;if(t>x.sl&&t<p)x.sl=t}
  const i=tfi(x.s,x.tf);if(i&&i.ct>x.t&&OSD[x.st.slice(2)].x(i))close(x,'conditions invalidées ('+TN[x.tf]+')',p)}
 function oppState(){if(S.emerg)return'Arrêt d\'urgence';if(S.opp=='stop')return'Arrêté';if(S.opp=='pause')return'Suspendu'+(S.halt?' (limite atteinte)':'');
@@ -409,21 +411,21 @@ NEVT=/\bSEC\b|\bETF\b|\bFed\b|regulat|lawsuit|hack|exploit|\bban\b|\bCPI\b|infla
 function newsInfo(n){const t=(n.title||'')+' '+(n.categories||''),age=(Date.now()-n.published_on*1000)/36e5,as=SY.filter(s=>NAS[s].test(t)),po=NPOS.test(n.title||''),ne=NNEG.test(n.title||''),sg=po&&!ne?1:ne&&!po?-1:0,ev=NEVT.test(n.title||''),unc=NUNC.test(n.title||'');
  return{as,sg,ev,unc,age,fr:age<2?'récente (< 2 h)':age<24?'du jour':age<72?'ancienne (> 24 h)':'obsolète (> 3 jours)',imp:(ev?2:1)+(as.length?1:0)}}
 const nw1=i=>(i.ev?6:3)*(i.unc?.5:1)*(i.age<2?1:.5);
-function newsImpact(s){let adj=0,it=[],veto=false;(Array.isArray(NEWS)?NEWS:[]).forEach(n=>{const i=newsInfo(n);if(!i.as.includes(s)||i.age>6||!i.sg)return;adj+=nw1(i)*i.sg;it.push({n,i});if(i.sg<0&&i.ev&&!i.unc&&i.age<2)veto=true});return{adj:Math.max(-10,Math.min(10,Math.round(adj))),it,veto}}
+function newsImpact(s){let adj=0,it=[],veto=false;(Array.isArray(NEWS)?NEWS:[]).forEach(n=>{const i=newsInfo(n);if(!i.as.includes(s)||i.age>S.cfg.newsHrs||!i.sg)return;adj+=nw1(i)*i.sg;it.push({n,i});if(i.sg<0&&i.ev&&!i.unc&&i.age<2)veto=true});return{adj:Math.max(-S.cfg.newsMax,Math.min(S.cfg.newsMax,Math.round(adj))),it,veto}}
 function newsApply(a,s){if(S.newsOn===false)return;const w=newsImpact(s);a.nw=w;if(!w.adj)return;a.conf=Math.max(0,Math.min(95,a.conf+w.adj));const k=s+'|'+w.it.map(x=>x.n.published_on).join(',');
  if(!newsApply.sent[k]){newsApply.sent[k]=1;log('News','message','→ AI Analyst : '+s+', '+w.it.length+' actualité(s) récente(s), '+(w.adj>0?'+':'')+w.adj+' pt(s) sur le score. Hypothèse non vérifiée : « '+String(w.it[0].n.title).slice(0,80)+' »')}}
 newsApply.sent={};
 async function loadNews(q){if(!q){NEWS='load';head();render()}try{const j=await(await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN')).json();if(!Array.isArray(j.Data))throw 0;NEWS=j.Data.slice(0,40);NT=Date.now();
  const n=NEWS.filter(x=>{const i=newsInfo(x);return i.as.length&&i.age<6}).length;log('News','analyse',NEWS.length+' actualités récupérées (CryptoCompare), '+n+' récentes concernent vos actifs')}catch(e){if(!Array.isArray(NEWS))NEWS='err';log('News','erreur','source d\'actualités injoignable')}if(['news','agents','dash'].includes(page))render()}
-function newsTick(){if(S.newsOn!==false&&(S.scalp=='run'||S.opp=='run')&&NEWS!='load'&&Date.now()-NT>3e5){NT=Date.now();loadNews(1)}}
+function newsTick(){if(S.newsOn!==false&&(S.scalp=='run'||S.opp=='run')&&NEWS!='load'&&Date.now()-NT>S.cfg.newsMin*6e4){NT=Date.now();loadNews(1)}}
 function newsAgState(){if(S.newsOn===false)return'Suspendu (influence désactivée)';if(NEWS=='err')return'Erreur : source injoignable';if(NEWS=='load')return'Analyse en cours…';return Array.isArray(NEWS)?'Actualités analysées il y a '+Math.round((Date.now()-NT)/60000)+' min':'En attente : actualités non chargées'}
-function newsWhy(i){if(!i.as.length)return'Hors de vos 7 actifs : aucun effet sur les agents.';if(i.age>6)return'Trop ancienne (> 6 h) : ignorée par l\'Analyst.';if(!i.sg)return'Ton indéterminé : aucun effet sur le score.';
+function newsWhy(i){if(!i.as.length)return'Hors de vos 7 actifs : aucun effet sur les agents.';if(i.age>S.cfg.newsHrs)return'Trop ancienne (> '+S.cfg.newsHrs+' h) : ignorée par l\'Analyst.';if(!i.sg)return'Ton indéterminé : aucun effet sur le score.';
  return'Impact potentiel (hypothèse, pas une certitude) : environ '+(i.sg>0?'+':'−')+Math.round(nw1(i))+' pt(s) sur le score de '+i.as.join('/')+(i.sg<0&&i.ev&&!i.unc&&i.age<2?' et achat suspendu par prudence':'')}
 PAGES.news=()=>{const on=S.newsOn!==false;let b='';
  if(NEWS=='load')b='<p class="g">Chargement…</p>';else if(NEWS=='err')b='<div class="bad">Actualités indisponibles (source injoignable). Aucune actualité n\'est inventée.</div>';
  else if(Array.isArray(NEWS))b=NEWS.map(n=>({n,i:newsInfo(n)})).sort((x,y)=>y.i.imp-x.i.imp||y.n.published_on-x.n.published_on).slice(0,25).map(({n,i})=>`<div class="card"><b>${esc(n.title)}</b><div class="sm g">${esc((n.source_info&&n.source_info.name)||n.source||'source inconnue')} · ${dt(n.published_on*1000)} · langue ${esc(n.lang||'?')} · ${i.fr}</div><div class="sm" style="margin-top:4px">Actifs : ${i.as.length?i.as.join(', '):'aucun de vos 7 actifs'} · importance ${['','faible','moyenne','élevée'][i.imp]} · ton ${i.sg>0?'<span class=up>positif</span>':i.sg<0?'<span class=dn>négatif</span>':'neutre / indéterminé'} · ${i.unc?'information incertaine (formulation conditionnelle ou rumeur)':'source unique, non vérifiée'}</div><div class="sm g">${esc(newsWhy(i))}</div>${/^https:\/\//.test(n.url)?`<a class="sm" style="color:var(--bl)" href="${esc(n.url)}" target="_blank" rel="noopener">Lire la source</a>`:''}</div>`).join('');
  const pp=S.pos.map(x=>({x,w:newsImpact(x.s)})).filter(o=>o.w.it.length);
- return banners()+`<div class="card"><div class="row" style="padding-top:0"><b>AI News</b><b>${newsAgState()}</b></div><div class="sm g">Source : CryptoCompare (flux public, anglais). Les actifs, le ton (positif/négatif) et l'importance sont détectés par mots-clés : algorithme déterministe, pas une IA externe, donc approximatif. Aucune actualité n'est vérifiée par l'application. Actualités actions : non connectées.</div><div class="sm" style="margin-top:6px">Influence sur les décisions : <b>${on?'activée':'désactivée'}</b>. Si activée, une actualité récente (&lt; 6 h) sur un actif ajuste le score de l'Analyst de ±10 points maximum ; une actualité négative importante, récente et non conditionnelle fait refuser l'achat par le Supervisor. Le Risk Manager contrôle ensuite l'ordre comme d'habitude.</div><div class="btns"><button data-a="news">Actualiser</button><button class="s" data-a="nwt">${on?'Désactiver':'Activer'} l'influence sur les agents</button></div></div>`+
+ return banners()+`<div class="card"><div class="row" style="padding-top:0"><b>AI News</b><b>${newsAgState()}</b></div><div class="sm g">Source : CryptoCompare (flux public, anglais). Les actifs, le ton (positif/négatif) et l'importance sont détectés par mots-clés : algorithme déterministe, pas une IA externe, donc approximatif. Aucune actualité n'est vérifiée par l'application. Actualités actions : non connectées.</div><div class="sm" style="margin-top:6px">Influence sur les décisions : <b>${on?'activée':'désactivée'}</b>. Si activée, une actualité récente (&lt; ${S.cfg.newsHrs} h) sur un actif ajuste le score de l'Analyst de ±${S.cfg.newsMax} points maximum ; une actualité négative importante, récente et non conditionnelle fait refuser l'achat par le Supervisor. Le Risk Manager contrôle ensuite l'ordre comme d'habitude.</div><div class="btns"><button data-a="news">Actualiser</button><button class="s" data-a="nwt">${on?'Désactiver':'Activer'} l'influence sur les agents</button></div></div>`+
  `<div class="card"><b>Impact sur le portefeuille</b>${pp.map(o=>`<div class="row sm"><span>${o.x.s} (position ouverte)</span><span>${o.w.it.length} actualité(s), ${o.w.adj>0?'+':''}${o.w.adj} pt(s)</span></div>`).join('')||'<div class="sm g">Aucune actualité récente ne concerne vos positions ouvertes.</div>'}</div>`+b};
 ACT.nwt=()=>{S.newsOn=S.newsOn===false;log('Admin','paramètre','influence AI News = '+(S.newsOn!==false));done()};
 /* ===== Phase 2 : mode démonstration (état totalement séparé) ===== */
@@ -457,6 +459,100 @@ PAGES.demo=()=>{const w=`<div class="warn"><b>MODE DÉMONSTRATION</b> — scéna
 <h2>Historique de démonstration</h2><div class="card">${s.hist.map(hrow).join('')||'<p class="g">Aucune opération pour l\'instant.</p>'}</div>
 <h2>Échanges entre agents (démonstration)</h2><div class="card">${s.log.slice(0,25).map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')} · ${esc(l.a)}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g">En attente du lancement.</p>'}</div>`};
 PG.splice(2,0,['demo','Démo']);
+/* ===== Phases 3-4 : centre des agents ===== */
+let AGS=null,CF={a:'',t:'',s:''},SC=0;
+const AGD=[['Supervisor','AI Supervisor',3,'Reçoit toutes les propositions, arbitre entre agents (priorité : rendement/risque net × score, un seul agent par actif), consulte le Risk Manager puis autorise ou refuse. Peut aussi refuser un achat sur actualité négative importante.',0],
+['Analyst','AI Analyst',4,'Calcule RSI, MACD, moyennes mobiles, Bollinger, ATR et volumes sur les bougies Binance réelles, détecte les signaux des stratégies et leur donne un score.',0],
+['News','AI News',5,'Récupère les actualités CryptoCompare, détecte les actifs concernés, le ton et l\'incertitude, et ajuste le score de l\'Analyst.',1],
+['Buyer','AI Buyer',6,'Prépare les propositions d\'achat : entrée, quantité, stop-loss, take-profit, capital engagé et rendement/risque net (frais et slippage inclus).',0],
+['Seller','AI Seller',7,'Surveille les positions ouvertes : stop-loss, take-profit, stop suiveur, sorties partielles, sorties temporelles. Non désactivable : il protège les positions.',0],
+['Risk','AI Risk Manager',2,'Contrôle indépendant et non contournable de chaque ordre : risque, pertes, drawdown, exposition, positions, liquidités, fraîcheur des données, cohérence des prix, rendement/risque.',0],
+['Portfolio','AI Portfolio Manager',1,'Suit capital, liquidités, capital engagé, exposition et performance. Agent passif : il n\'émet aucun message, ses chiffres sont calculés à l\'affichage.',0],
+['Scalper','AI Scalper',8,'Cherche des opportunités rapides (bougies 1 min), en classe plusieurs, adapte son budget et évite le surtrading.',2],
+['Opportunity','AI Opportunity Trader',9,'Cherche des opportunités sur 5 min, 15 min, 1 h et 4 h avec 7 stratégies, sorties partielles et stop suiveur.',3]];
+const TYL={analyse:'analyses',proposition:'propositions',validation:'validations',accord:'accords',refus:'refus','exécution':'exécutions',fermeture:'fermetures',protection:'protections',message:'messages',erreur:'erreurs',alerte:'alertes','état':'changements d\'état',arbitrage:'arbitrages','paramètre':'réglages',attente:'attentes'};
+const cnt=k=>Object.entries((S.ac||{})[k]||{}).filter(e=>e[0]!='t').map(e=>e[1]+' '+(TYL[e[0]]||e[0])).join(' · ')||'aucun événement',
+agState=k=>k=='News'?newsAgState():k=='Portfolio'?'Passif : suivi à l\'affichage':ST(k,'—');
+const agCard=a=>{const l=S.log.find(x=>x.a==a[0]);return`<div class="card"><div class="row" style="padding-top:0"><b>${a[1]}</b><span class="g sm">${esc(agState(a[0]))}</span></div><div class="sm g">${l?esc(new Date(l.t).toLocaleTimeString('fr-FR')+' · '+l.m):'Aucune activité enregistrée'}</div><div class="sm" style="margin-top:4px">${cnt(a[0])}</div><div class="btns"><button class="s" data-a="ags" data-v="${a[0]}">Ouvrir la fiche</button></div></div>`};
+function agFiche(k){const a=AGD.find(x=>x[0]==k),L=S.log.filter(x=>x.a==k),la=L.find(x=>x.ty=='analyse'),E=eq();let perf='Pas de résultat financier propre à cet agent.',sy=SY.map(s=>s+(fresh(s)?' ●':' ○')).join(' · ')+'<div class="g">● données fraîches · ○ périmées ou absentes</div>';
+ if(k=='Scalper'||k=='Opportunity'){const st=stats(null,k=='Scalper'?'sc':'opp'),m=k=='Scalper'?D.sym:OD.sym;perf=`${st.n} opération(s) · net ${f2(st.net)} € · réussite ${f2(st.wr,0)} % · frais ${f2(st.fees)} €`;sy=SY.map(s=>`<div class="row sm"><span>${s}${fresh(s)?' ●':' ○'}</span><span class="g" style="text-align:right">${esc(m[s]||'—')}</span></div>`).join('')}
+ if(k=='Seller'){const st=stats();perf=`${st.n} clôture(s) · net ${f2(st.net)} € · ${S.pos.length} position(s) surveillée(s)`}
+ if(k=='Portfolio')perf=`valeur ${f2(E)} € · cash ${f2(S.cash)} € · engagé ${f2(engaged())} € (${f2(engaged()/E*100)} %) · drawdown ${f2((S.peak-E)/S.peak*100)} %`;
+ if(k=='Supervisor'||k=='Risk'){const c=S.ac||{};perf=`${(c.Supervisor||{}).accord||0} accord(s) · ${(c.Supervisor||{}).refus||0} refus · ${(c.Risk||{}).validation||0} validation(s) du Risk Manager`}
+ const rjs=k=='Scalper'?D.rej:k=='Opportunity'?OD.rej:S.rj||{},rj=['Supervisor','Risk','Buyer','Scalper','Opportunity'].includes(k)?Object.entries(rjs).sort((x,y)=>y[1]-x[1]).slice(0,6):null;
+ const act=(v,ac)=>`<button class="s" data-a="${ac}" data-v="${v}">`,tg=k=='News'?`<button data-a="nwt">${S.newsOn!==false?'Désactiver':'Activer'} AI News</button>`:k=='Scalper'?`<button data-a="sc" data-v="run">Démarrer</button>${act('pause','sc')}Suspendre</button>${act('stop','sc')}Arrêter</button>`:k=='Opportunity'?`<button data-a="oc" data-v="run">Démarrer</button>${act('pause','oc')}Suspendre</button>`:'<span class="sm g">Non désactivable : agent de sécurité ou d\'infrastructure. Seuls Scalper, Opportunity et News peuvent être suspendus.</span>';
+ return`<div class="btns"><button class="s" data-a="ags" data-v="">← Tous les agents</button></div><div class="card"><div class="row" style="padding-top:0"><b>${a[1]}</b><b>${esc(agState(k))}</b></div><div class="sm g">${a[3]}<br>Type : algorithme déterministe, aucune IA externe.</div><div class="btns">${tg}</div></div>
+<div class="card"><b>Activité réelle</b>${row('Dernière activité',L[0]?esc(dt(L[0].t)+' · '+L[0].m):'aucune')}${row('Dernière analyse',la?esc(dt(la.t)+' · '+la.m):'aucune')}${row('Événements (depuis le début)',cnt(k))}${row('Performances',perf)}</div>
+<div class="card"><b>Actifs surveillés</b><div class="sm" style="margin-top:6px">${sy}</div></div>${rj?`<div class="card"><b>Raisons des refus</b> <span class="g sm">${k=='Scalper'||k=='Opportunity'?'(depuis l\'ouverture de la page)':'(cumul de la simulation)'}</span>${rj.map(r=>`<div class="row sm"><span>${esc(r[0])}</span><b>${r[1]}</b></div>`).join('')||'<p class="g sm">Aucun refus enregistré.</p>'}</div>`:''}
+<div class="card"><b>Paramètres propres</b>${PRM.filter(q=>q[0]==a[2]).slice(0,6).map(q=>row(q[2],get(q[1]))).join('')}<div class="btns"><button class="s" data-a="goset" data-v="${a[2]}">Modifier dans les réglages</button></div></div>
+<div class="card"><b>Derniers messages</b>${L.slice(0,12).map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')} · ${esc(l.ty)}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g sm">Aucun message émis.</p>'}</div>`}
+PAGES.agents=()=>banners()+(AGS?agFiche(AGS):`<div class="card sm g">9 agents, tous des modules logiciels déterministes (aucune IA externe). Compteurs = événements réels du moteur depuis le début de la simulation ; aucune activité n'est simulée. Ils ne travaillent que page ouverte.</div>`+AGD.map(agCard).join('')+`<div class="btns"><button class="s" data-a="pg" data-v="com">Journal des échanges entre agents</button></div>`+diag()+oppCard()+oppDiag());
+ACT.ags=v=>{AGS=v||null;render();scrollTo(0,0)};const pg0=ACT.pg;ACT.pg=v=>{if(v=='agents')AGS=null;pg0(v)};
+const STEP={analyse:'Détection / analyse',message:'Message transmis',proposition:'Proposition','validation':'Contrôle du risque',accord:'Décision : accord',refus:'Décision : refus','exécution':'Exécution simulée',protection:'Protection',fermeture:'Clôture'};
+PAGES.com=()=>{const L=S.log.filter(l=>(!CF.a||l.a==CF.a)&&(!CF.t||l.ty==CF.t)&&(!CF.s||l.s==CF.s)),sel=(n,arr,lab)=>`<select data-cf="${n}"><option value="">${lab}</option>${arr.map(x=>`<option ${x==CF[n]?'selected':''}>${esc(x)}</option>`).join('')}</select>`;
+ const T=CF.s?S.log.filter(l=>l.s==CF.s&&STEP[l.ty]).slice(0,40).reverse():[],ps=CF.s&&S.pos.find(x=>x.s==CF.s);
+ return banners()+`<div class="card sm g">Chaque ligne est un événement réel du moteur (aucun message fictif). Choisissez un actif pour suivre une opération de la détection à la vente.</div>${sel('s',SY,'Tous les actifs')}${sel('a',[...new Set(S.log.map(l=>l.a))],'Tous les agents')}${sel('t',[...new Set(S.log.map(l=>l.ty))],'Tous les types')}`+
+ (CF.s?`<h2>Parcours ${CF.s}</h2><div class="card"><div class="sm g">${ps?'Position ouverte : '+f2(ps.q,5)+' @ '+f2(ps.e,4)+' € · SL '+f2(ps.sl,4)+' · TP '+f2(ps.tp,4):'Aucune position ouverte sur cet actif.'}</div>${T.map((l,i)=>`<div class="row sm"><span class="g">${i+1}. ${new Date(l.t).toLocaleTimeString('fr-FR')} · ${esc(l.a)} · ${STEP[l.ty]}</span><span class="${l.ty=='refus'?'dn':''}">${esc(l.m)}</span></div>`).join('')||'<p class="g sm">Aucun événement pour cet actif.</p>'}</div>`:'')+
+ `<h2>Journal central (${L.length})</h2><div class="card">${L.slice(0,80).map(l=>`<div class="row sm"><span class="g">${dt(l.t)} · ${esc(l.a)} · ${esc(l.ty)}</span><span class="${l.ty=='refus'?'dn':''}">${esc(l.m)}</span></div>`).join('')||'<p class="g">Aucun événement.</p>'}</div>`};
+PG.splice(2,0,['com','Échanges']);
+/* ===== Phases 3-4 : centre des réglages (13 catégories) ===== */
+const CATS=['Général','Portefeuille','Gestion des risques','AI Supervisor','AI Analyst','AI News','AI Buyer','AI Seller','AI Scalper','AI Opportunity Trader','Marchés','Simulation','Alertes et sauvegardes'],
+LS={rsiLo:[20,60],rsiHi:[50,90],rsiMax:[10,45],slM:[.5,5],tpM:[.5,10],vmin:[1,5],vx:[1,4]},
+PRM=[[0,'fs','Taille du texte (pixels)','Agrandit ou réduit tout le texte de l\'application. Appliqué immédiatement.'],
+[1,'expMax','Exposition totale maximale (% du capital)','Part maximale du capital investie en même temps. Au-delà, le Risk Manager refuse tout nouvel achat.'],
+[2,'risk','Risque maximal par opération (% du capital)','Perte maximale acceptée si le stop-loss est touché. 0,25 % de 10 000 € = 25 €.'],
+[2,'dayLoss','Perte journalière maximale (%)','Si la perte du jour atteint ce seuil, tous les agents sont suspendus automatiquement.'],
+[2,'dd','Drawdown maximal (%)','Baisse maximale depuis le plus haut du portefeuille avant blocage automatique.'],
+[2,'maxPos','Positions simultanées maximales','Nombre maximal de positions et d\'ordres ouverts en même temps.'],
+[2,'minRR','Rendement/risque net minimal','Gain visé divisé par la perte possible, frais et slippage inclus. En dessous, l\'ordre est refusé.'],
+[3,'newsVeto','Autoriser AI News à bloquer un achat','Oui : une actualité négative importante, récente et non conditionnelle fait refuser l\'achat. Non : l\'actualité n\'ajuste que le score.'],
+[5,'newsMax','Influence maximale des actualités (points de score)','Plafond de l\'ajustement du score de l\'Analyst par les actualités. 0 = aucune influence sur le score.'],
+[5,'newsHrs','Fraîcheur maximale d\'une actualité (heures)','Une actualité plus ancienne est ignorée par les agents.'],
+[5,'newsMin','Actualisation des actualités (minutes)','Fréquence de récupération quand un agent de trading tourne.'],
+[6,'maxAsset','Taille maximale d\'une position (% du capital)','Capital engagé maximal sur un seul actif. Contrôlé aussi par le Risk Manager.'],
+[7,'trailAct','Activation du stop suiveur (% de hausse)','Le stop suiveur du Scalper démarre quand le prix dépasse l\'entrée de ce pourcentage.'],
+[7,'trail','Distance du stop suiveur (%)','Le stop suit le plus haut atteint, à cette distance.'],
+[7,'timeExit','Sortie temporelle du Scalper (minutes)','Une position du Scalper est clôturée après cette durée.'],
+[7,'beR','Protection du capital (multiple du risque R)','Opportunity : le stop remonte au seuil de rentabilité quand le gain atteint ce multiple du risque initial.'],
+[7,'partR','Déclenchement de la sortie partielle (multiple de R)','Opportunity : gain, en multiple du risque initial, qui déclenche la vente partielle.'],
+[7,'partFr','Part vendue lors de la sortie partielle (%)','Opportunity : pourcentage de la position vendu au déclenchement.'],
+[8,'budget','Budget du Scalper (% du capital)','Capital maximal que le Scalper peut engager (réduit avec les positions ouvertes).'],
+[8,'cd','Délai entre deux signaux par actif (secondes)','Évite les achats répétitifs sur le même actif.'],
+[8,'minScore','Score minimal d\'un signal','Un signal sous ce score est ignoré.'],
+[8,'maxHr','Transactions maximales par heure','Limite anti-surtrading du Scalper.'],
+[9,'oppBudget','Budget Opportunity Trader (% du capital)','Capital maximal engagé par cet agent.'],
+[9,'oppMax','Positions maximales Opportunity','Nombre maximal de positions de cet agent.'],
+[9,'oppMinScore','Score minimal Opportunity','Un signal sous ce score est ignoré.'],
+[9,'oppMinRR','Rendement/risque net minimal Opportunity','Seuil propre à cet agent, en plus du seuil du Risk Manager.'],
+[9,'oppCd','Délai entre deux signaux Opportunity (secondes)','Évite les achats répétitifs.'],
+[10,'stale','Péremption des données (secondes)','Au-delà, un cours est jugé périmé et aucun ordre n\'est accepté sur cet actif.'],
+[11,'fee','Frais par ordre (%)','Frais simulés à l\'achat et à la vente. 0,10 % = 1 € pour 1 000 €.'],
+[11,'slip','Slippage (%)','Écart simulé entre le prix attendu et le prix obtenu.'],
+[11,'ordMin','Expiration des ordres limites (minutes)','Un ordre limite non exécuté est annulé après ce délai.'],
+[12,'logMax','Taille du journal (événements conservés)','Nombre maximal d\'événements gardés dans la sauvegarde.']];
+for(const k in DEF().sp)for(const q in DEF().sp[k])PRM.push([['slM','tpM'].includes(q)?6:4,'sp.'+k+'.'+q,SD[k].n+' : '+(PL[q]||q),q=='slM'?'Distance du stop-loss en multiples de l\'ATR (volatilité moyenne) : plus grand = stop plus éloigné.':q=='tpM'?'Distance du take-profit en multiples de l\'ATR.':'Seuil d\'entrée de la stratégie (voir Stratégies).']);
+const sp3=k=>k.split('.'),lim=k=>k.startsWith('sp.')?LS[sp3(k)[2]]:LIM[k],def=k=>k.startsWith('sp.')?DEF().sp[sp3(k)[1]][sp3(k)[2]]:DEF().cfg[k],get=k=>k.startsWith('sp.')?S.sp[sp3(k)[1]][sp3(k)[2]]:S.cfg[k],put=(k,v)=>{if(k.startsWith('sp.'))S.sp[sp3(k)[1]][sp3(k)[2]]=v;else S.cfg[k]=v};
+function setPrm(t){const k=t.dataset.k,L=lim(k),v=+t.value;let err='';if(t.value===''||!isFinite(v)||v<L[0]||v>L[1])err='doit être entre '+L[0]+' et '+L[1];else if(k.startsWith('sp.')){const[,st,q]=sp3(k);if(q=='rsiLo'&&v>=S.sp[st].rsiHi||q=='rsiHi'&&v<=S.sp[st].rsiLo)err='RSI min doit rester inférieur à RSI max'}
+ if(err){t.value=get(k);return toast('Valeur refusée : '+err+'. Ancienne valeur conservée ('+get(k)+').')}snapCfg();put(k,v);log('Admin','paramètre',k+' = '+v);save();head();toast('Enregistré : '+v)}
+const prmCard=p=>{const k=p[1],L=lim(k),v=get(k),b=L[0]==0&&L[1]==1;return`<div class="card"><div class="row" style="padding-top:0"><b>${p[2]}</b><button class="s" style="min-height:32px;padding:4px 10px" data-a="pdef" data-v="${k}">Défaut</button></div><div class="sm g">${p[3]}</div>${b?`<select data-k="${k}"><option value="0" ${v==0?'selected':''}>Non</option><option value="1" ${v==1?'selected':''}>Oui</option></select>`:`<input type="number" step="any" inputmode="decimal" min="${L[0]}" max="${L[1]}" data-k="${k}" value="${v}">`}<div class="sm g">Limites : ${L[0]} à ${L[1]} · défaut : ${def(k)}${v==def(k)?' · valeur recommandée en place':''}</div></div>`};
+const inf=t=>`<div class="card sm g">${t}</div>`,CX={
+0:()=>inf('Langue : français (seule langue disponible). Les données sont stockées uniquement dans ce navigateur. Aucune clé API n\'est enregistrée. Simulation uniquement : aucun ordre réel n\'est envoyé.'),
+1:()=>`<div class="card">${row('Capital initial',f2(S.init)+' €')}${row('Valeur actuelle',f2(eq())+' €')}${row('Liquidités',f2(S.cash)+' €')}<label>Capital virtuel initial (€) — appliqué à la réinitialisation (100 à 10 000 000)</label><input id="cap" type="number" inputmode="decimal" value="${CAP}"><div class="btns"><button class="d" data-a="reset">Réinitialiser entièrement la simulation (avec ce capital)</button></div></div>`,
+2:()=>inf('Ces plafonds sont appliqués par le Risk Manager à chaque ordre. Aucun agent ne peut les contourner ni les modifier : seul l\'administrateur (vous) les change, dans des limites sécurisées.'),
+3:()=>inf('Le Supervisor classe les propositions par rendement/risque net × score, ne sert qu\'un agent par actif et fait passer chaque ordre par le Risk Manager. Ces règles sont fixes.'),
+4:()=>inf('Indicateurs calculés sur les vraies bougies : RSI 14, MACD 12/26/9, moyennes 5/20/50, Bollinger 20/2, ATR 14. Les périodes sont fixes ; les seuils ci-dessous sont modifiables.'),
+5:()=>`<div class="card"><div class="row" style="padding-top:0"><b>AI News</b><b>${newsAgState()}</b></div><div class="btns"><button data-a="nwt">${S.newsOn!==false?'Désactiver':'Activer'} l'influence sur les agents</button><button class="s" data-a="news">Actualiser</button></div></div>`,
+6:()=>inf('Le Buyer calcule stop-loss et take-profit à partir de l\'ATR et dimensionne la position selon le risque autorisé.'),
+7:()=>inf('Le Seller applique ces règles aux positions ouvertes. Les réglages de sortie partielle, de protection du capital concernent l\'Opportunity Trader ; le stop suiveur et la sortie temporelle concernent le Scalper.'),
+8:()=>inf('État : '+scState()+'. Démarrage et arrêt dans l\'onglet Scalper.'),
+9:()=>inf('État : '+oppState()+'. Démarrage et arrêt dans l\'onglet Opportunity.'),
+10:()=>`<div class="card"><div class="sm g">Crypto : Binance (données publiques), ${bad?'<b class=dn>indisponible</b>':FX?'connecté':'en attente'}. Actions et ETF : non connectés (consultation seulement via un proxy HTTPS que vous fournissez, aucun ordre possible).</div><label>URL du proxy de données actions (HTTPS)</label><input id="stu" type="url" placeholder="https://…" value="${esc(S.stk.url)}"><div class="btns"><button class="s" data-a="pg" data-v="stk">Tester dans l'onglet Actions</button></div></div>`,
+11:()=>`<div class="card"><div class="sm g">Frais et slippage s'appliquent à chaque achat et vente simulés. Les tests et la démonstration sont isolés de votre portefeuille.</div><div class="btns"><button class="s" data-a="selftest">Test du moteur Scalper</button><button class="s" data-a="selftestO">Test du moteur Opportunity</button><button class="s" data-a="pg" data-v="demo">Mode démonstration</button></div></div>`,
+12:()=>`<div class="warn">Les données sont stockées uniquement dans ce navigateur, sans synchronisation entre appareils. Exportez régulièrement une sauvegarde.</div><div class="card"><div class="btns"><button class="s" data-a="exp">Exporter la sauvegarde</button><button class="s" data-a="cfgdef">Réinitialiser tous les réglages</button><button class="s" data-a="cfgprev">Restaurer les réglages précédents</button><button class="s" data-a="pg" data-v="alerts">Alertes de prix et de signaux</button></div><label>Importer une sauvegarde</label><input id="imp" type="file" accept="application/json"></div>`+S.log.filter(l=>l.ty=='paramètre'&&/remplacé|corrig|migr|invalide|illisible/.test(l.m)).slice(0,5).map(l=>`<div class="sm warn">${dt(l.t)} · ${esc(l.m)}</div>`).join('')};
+PAGES.set=()=>banners()+`<div class="btns" style="overflow-x:auto;flex-wrap:nowrap">${CATS.map((c,i)=>`<button class="${i==SC?'':'s'}" style="flex:0 0 auto" data-a="scat" data-v="${i}">${i+1}. ${c}</button>`).join('')}</div><h2>${SC+1}. ${CATS[SC]}</h2>`+CX[SC]()+PRM.filter(p=>p[0]==SC).map(prmCard).join('')+`<div class="btns"><button class="s" data-a="cdef">Valeurs par défaut de cette catégorie</button></div>`;
+ACT.scat=v=>{SC=+v;render();scrollTo(0,0)};ACT.goset=v=>{SC=+v;page='set';head();render();scrollTo(0,0)};
+ACT.pdef=k=>{snapCfg();put(k,def(k));log('Admin','paramètre',k+' remis à la valeur par défaut');done()};
+ACT.cdef=()=>{snapCfg();PRM.filter(p=>p[0]==SC).forEach(p=>put(p[1],def(p[1])));log('Admin','paramètre','catégorie « '+CATS[SC]+' » remise aux valeurs par défaut');done()};
 /* Start */
 flushFix();head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script></body></html>
