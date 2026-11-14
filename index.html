@@ -113,9 +113,9 @@ function order(p,R){const o={id:++S.n,s:p.s,type:p.type,lim:p.lim,entry:p.entry,
  if(!R&&p.type=='market')fill(o,p.q,p.entry);else if(!R)log('Simulation','ordre',`Ordre limite ${o.id} ${p.s} @ ${f2(p.lim,4)} € en attente`)}
 function fill(o,q,px){const fee=q*px*S.cfg.fee/100;S.cash-=q*px+fee;let x=S.pos.find(p=>p.oid==o.id);
  if(x){x.e=(x.e*x.q+px*q)/(x.q+q);x.q+=q;x.fee+=fee;x.hi=Math.max(x.hi,px)}else S.pos.push({id:++S.n,oid:o.id,s:o.s,q,e:px,sl:o.sl,tp:o.tp,hi:px,fee,t:Date.now(),st:o.st,tf:o.tf,a:o.a,r0:px-o.sl});
- o.filled+=q;if(o.q-o.filled<=o.q*1e-9)o.status='filled';log('Simulation','exécution',`${o.status=='filled'?'Exécution':'Exécution partielle'} ${o.s} ${f2(q,5)} @ ${f2(px,4)} € (frais ${f2(fee)} €)`)}
+ if(!o.filled)apx(agOf(o)).exe++;o.filled+=q;if(o.q-o.filled<=o.q*1e-9)o.status='filled';log('Simulation','exécution',`${o.status=='filled'?'Exécution':'Exécution partielle'} ${o.s} ${f2(q,5)} @ ${f2(px,4)} € (frais ${f2(fee)} €)`)}
 function orders(){const now=Date.now();S.ord.filter(o=>o.status=='open').forEach(o=>{
- if(now-o.t>S.cfg.ordMin*60000){o.status='cancelled';o.why='expiré';log('Simulation','ordre','Ordre '+o.id+' expiré');return}
+ if(now-o.t>S.cfg.ordMin*60000){o.status='cancelled';o.why='expiré';apx(agOf(o)).exp++;log('Simulation','ordre','Ordre '+o.id+' expiré');return}
  if(S.emerg||S.halt||!fresh(o.s))return;if(M[o.s].p<=o.lim){const r=o.q-o.filled;fill(o,r*.5*o.lim<10?r:r*.5,o.lim)}})}
 function cancelAll(){S.ord.forEach(o=>{if(o.status=='open'){o.status='cancelled';o.why='arrêt d\'urgence'}})}
 function close(x,why,px){const c=S.cfg,ex=px*(1-c.slip/100),pr=x.q*ex,fee=pr*c.fee/100,pnl=pr-fee-(x.q*x.e+x.fee);
@@ -137,8 +137,8 @@ function supervise(p,xr){const ao=agOf(p)=='opp',Dd=ao?OD:D,t=p.st!='test',nm=ao
  log(ao?'Opportunity':'Buyer','proposition',`${p.s} ${p.type} (${nm}) entrée ${f2(p.entry,4)} SL ${f2(p.sl,4)} TP ${f2(p.tp,4)} qté ${f2(p.q,5)} R/R net ${f2(p.rr)} · potentiel net ${f2(p.q*(p.tp-p.entry-p.entry*(2*S.cfg.fee/100+S.cfg.slip/100)))} €`);
  const R=risk(p);if(p.cost<10)R.push('montant < 10 €');if(t&&p.st!='manuel'&&S.newsOn!==false&&S.cfg.newsVeto&&newsImpact(p.s).veto)R.push('AI News : actualité négative importante et récente sur '+p.s+' (non vérifiée) — achat suspendu par prudence');if(xr)R.push(xr);
  {const q=(S.ap=S.ap||{})[agOf(p)]=S.ap[agOf(p)]||{prop:0,acc:0,ref:0};q.prop++;R.length?q.ref++:q.acc++}
- if(R.length){log('Supervisor','refus',p.s+' refusé : '+R.join(', '));if(t){Dd.ref++;Dd.lr=R.join(', ');R.forEach(r=>{const k=r.replace(/[\d.,]+/g,'#');Dd.rej[k]=(Dd.rej[k]||0)+1})}order(p,R);return false}
- log('Risk','validation',p.s+' : risque '+f2(p.risk)+' € dans les limites');log('Supervisor','accord',p.s+' autorisé');if(t)Dd.acc++;order(p);return true}
+ if(R.length){log('Supervisor','refus',p.s+' refusé : '+R.join(', '));if(t){Dd.ref++;Dd.lr=R.join(', ');R.forEach(r=>{const k=r.replace(/[\d.,]+/g,'#');Dd.rej[k]=(Dd.rej[k]||0)+1})}order(p,R);if(t)phAdd(p,R);return false}
+ log('Risk','validation',p.s+' : risque '+f2(p.risk)+' € dans les limites');log('Supervisor','accord',p.s+' autorisé');if(t)Dd.acc++;order(p);if(t)phAdd(p,null);return true}
 /* AI Scalper Engine */
 const WN={mom:(i,P)=>i.f<=i.m?'MA5≤MA20':!(i.r>P.rsiLo&&i.r<P.rsiHi)?'RSI '+f2(i.r,0)+' hors '+P.rsiLo+'-'+P.rsiHi:'MACD≤signal',
 rev:(i,P)=>i.r>=P.rsiMax?'RSI '+f2(i.r,0)+' ≥ '+P.rsiMax:i.p>=i.bl?'prix > Bollinger basse':'pas de rebond',
@@ -160,14 +160,14 @@ function scalper(){const now=Date.now(),c=S.cfg;
  SY.forEach(s=>{const a=analyse(s);if(!fresh(s)){D.sym[s]='données périmées ou absentes';return}if(!a.i){D.sym[s]='historique insuffisant';return}
   D.an++;const x=' · ATR '+f2(a.i.a/a.p*100,2)+' % (coût aller-retour '+f2(2*c.fee+c.slip)+' %)';
   if(!a.sig){D.sym[s]='aucun signal : '+Object.keys(SD).filter(k=>S.strat[k]).map(k=>SD[k].n+' ('+WN[k](a.i,S.sp[k])+')').join(' ; ')+x;return}
-  D.sig++;D.sigT=now;newsApply(a,s);const h=S.hist.find(y=>y.s==s),cd=c.cd*(h&&h.pnl<0&&now-h.t<9e5?3:1)*1000;
-  if(a.conf<c.minScore)D.sym[s]=`signal ${a.sig} ignoré : score ${a.conf} < ${c.minScore}`+x;
-  else if(S.pos.some(y=>y.s==s)||S.ord.some(o=>o.s==s&&o.status=='open'))D.sym[s]='signal '+a.sig+' : position ou ordre déjà ouvert';
-  else if(now-(CD[s]||0)<cd)D.sym[s]='signal '+a.sig+' : délai anti-répétition';else cand.push(a)});
- if(S.hist.filter(h=>now-h.t<36e5&&agOf(h)=='sc').length+S.pos.filter(x=>agOf(x)=='sc').length>=c.maxHr){D.why='limite de '+c.maxHr+' transactions/heure atteinte';return}
+  D.sig++;D.sigT=now;apx('sc').det++;newsApply(a,s);const h=S.hist.find(y=>y.s==s),cd=c.cd*(h&&h.pnl<0&&now-h.t<9e5?3:1)*1000;
+  if(a.conf<c.minScore)igc('sc','score inférieur au seuil'),D.sym[s]=`signal ${a.sig} ignoré : score ${a.conf} < ${c.minScore}`+x;
+  else if(S.pos.some(y=>y.s==s)||S.ord.some(o=>o.s==s&&o.status=='open'))igc('sc','position ou ordre déjà ouvert'),D.sym[s]='signal '+a.sig+' : position ou ordre déjà ouvert';
+  else if(now-(CD[s]||0)<cd)igc('sc','délai anti-répétition'),D.sym[s]='signal '+a.sig+' : délai anti-répétition';else{apx('sc').elig++;cand.push(a)}});
+ if(S.hist.filter(h=>now-h.t<36e5&&agOf(h)=='sc').length+S.pos.filter(x=>agOf(x)=='sc').length>=c.maxHr){D.why='limite de '+c.maxHr+' transactions/heure atteinte';igc('sc','limite horaire de transactions');return}
  if(!cand.length){D.why=D.an?(D.sig?'signaux présents mais aucun éligible (voir motifs)':'aucune stratégie ne valide son entrée : aucune transaction forcée'):'aucune donnée exploitable';if(now-(scalper.w||0)>3e5){scalper.w=now;log('Scalper','attente',D.why)}return}
  D.why='';cand.sort((a,b)=>b.conf-a.conf).forEach(a=>{CD[a.s]=now;log('Analyst','analyse',`${a.s} ${a.sig} score ${a.conf}, RSI ${f2(a.r,0)}, MACD ${a.i.mh>0?'+':'−'}, vol ×${f2(a.i.vr)}, ATR ${f2(a.i.a/a.p*100,2)} %`);
-  const p=buyer(a);D.sym[a.s]='proposition transmise au Supervisor';PQ.push({ag:'sc',p,conf:a.conf,cb:ok=>{D.sym[a.s]=ok?'proposition acceptée → ordre '+S.ord[0].type:'refusée : '+D.lr;if(!ok)D.why='dernière proposition refusée : '+D.lr}});})}
+  const p=buyer(a);if(!(p.q>0)){scNoQ(a);return}if(isFinite(p.rr)&&p.rr<c.minRR){scSkip(a,p);return}D.sym[a.s]='proposition transmise au Supervisor';PQ.push({ag:'sc',p,conf:a.conf,cb:ok=>{D.sym[a.s]=ok?'proposition acceptée → ordre '+S.ord[0].type:'refusée : '+D.lr;if(!ok)D.why='dernière proposition refusée : '+D.lr}});})}
 function diag(){const rs=Object.entries(D.rej).sort((a,b)=>b[1]-a[1]),T=(S.tests||[])[0];
  return`<div class="card"><b>Diagnostic en temps réel</b> <span class="g sm">(compteurs depuis l'ouverture de la page)</span>${row('État du Scalper',scState())}${row('Cycles d\'analyse',D.rc+(D.t?' · dernier il y a '+Math.round((Date.now()-D.t)/1000)+' s':''))}${row('Actifs analysés (cycle)',D.an+' / '+SY.length)}${row('Signaux détectés (cycle)',D.sig)}${row('Propositions d\'achat',D.prop)}${row('Ordres acceptés',D.acc)}${row('Ordres refusés',D.ref)}${row('Positions ouvertes',S.pos.filter(x=>agOf(x)=='sc').length)}${row('Ventes effectuées',S.hist.filter(h=>agOf(h)=='sc').length)}<div class="sm" style="margin-top:6px"><b>Motif sans achat :</b> ${esc(D.why||'—')}</div>${SY.map(s=>`<div class="row sm"><span>${s}</span><span class="g" style="text-align:right">${esc(D.sym[s]||'—')}</span></div>`).join('')}${rs.length?'<div class="sm" style="margin-top:6px"><b>Motifs de refus (Supervisor / Risk Manager) :</b></div>'+rs.map(r=>`<div class="row sm"><span>${esc(r[0])}</span><b>${r[1]}</b></div>`).join(''):''}${D.lr?'<div class="sm g">Dernier refus : '+esc(D.lr)+'</div>':''}</div>
 <div class="card"><div class="btns"><button data-a="selftest">TEST DU MOTEUR</button></div><div class="sm g">Exécute le vrai moteur (Supervisor, Risk, ordres, exécution, sorties) sur un portefeuille isolé et un prix fictif <b>TEST</b>. Rien n'est ajouté à votre cash, à l'historique ni aux statistiques du Scalper.</div>${T?`<div class="row"><b>TEST · ${dt(T.t)}</b><b class="${T.ok?'up':'dn'}">${T.ok?'RÉUSSI':'ÉCHEC'}</b></div>`+T.R.map(r=>`<div class="row sm"><span>${r.ok?'✔':'✘'} ${esc(r.n)}</span><span class="g">${esc(r.d)}</span></div>`).join(''):''}</div>`}
@@ -213,7 +213,7 @@ function stats(k,a){const h=S.hist.filter(x=>(!k||x.st==k)&&(!a||agOf(x)==a)),w=
 const hrow=h=>`<div class="row"><span>${esc(h.s)} <span class="g sm">${AGN[agOf(h)]} · ${esc(h.why)} · ${dt(h.t)}</span></span><b class="${cl(h.pnl)}">${f2(h.pnl)} €</b></div>`;
 const PAGES={
 dash(){const E=eq(),st=stats(),run=S.scalp=='run'?1:0;return banners()+nowCard()+`<div class="grid">${card('Valeur du portefeuille',f2(E)+' €')}${card('Cash',f2(S.cash)+' €')}${card('Capital engagé',f2(engaged())+' €')}${card('Résultat total',f2(E-S.init)+' €',cl(E-S.init))}${card('Aujourd\'hui',f2(E-S.dayStart)+' €',cl(E-S.dayStart))}${card('Positions ouvertes',S.pos.length)}${card('Scalper',scState())}${card('Opportunity Trader',oppState())}${card('AI News',newsAgState().split(' · ')[0],nsT()[1])}${card('Drawdown',f2((S.peak-E)/S.peak*100)+' %')}</div>
-${alCard()}${oppCard()}<h2>Dernières activités</h2>${actCard()}<h2>Évolution du portefeuille</h2><div class="card">${chart(S.eq.slice(-200))}</div><h2>Dernières transactions</h2><div class="card">${S.hist.slice(0,5).map(hrow).join('')||'<p class="g">Aucune transaction. Démarrez le Scalper dans l\'onglet Scalper : il n\'ouvre une position que si une stratégie valide un signal (pas de transaction forcée).</p>'}</div>
+${alCard()}${botCards()}${oppCard()}<h2>Dernières activités</h2>${actCard()}<h2>Évolution du portefeuille</h2><div class="card">${chart(S.eq.slice(-200))}</div><h2>Dernières transactions</h2><div class="card">${S.hist.slice(0,5).map(hrow).join('')||'<p class="g">Aucune transaction. Démarrez le Scalper dans l\'onglet Scalper : il n\'ouvre une position que si une stratégie valide un signal (pas de transaction forcée).</p>'}</div>
 <p class="g sm">Simulation uniquement, aucun argent réel. Aucun bénéfice n\'est garanti. Les agents ne travaillent que lorsque cette page est ouverte.</p>`},
 agents(){const last=a=>{const l=S.log.find(x=>x.a==a);return l?esc(l.m):'<span class="g">aucune activité</span>'},E=eq();
  const A=[['Administrateur suprême','Contrôle total : capital, limites, arrêt d\'urgence.',S.emerg?'Arrêt d\'urgence':'Disponible','Admin'],['AI Supervisor','Arbitre les propositions, consulte le Risk Engine, refuse ou autorise.',S.emerg?'Bloqué':'Actif','Supervisor'],
@@ -258,7 +258,7 @@ exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([J
 news(){loadNews()},bt(){runBt()},selftest(){selfTest();done()}};
 function done(){flushFix();save();head();render()}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(b&&ACT[b.dataset.a])ACT[b.dataset.a](b.dataset.v)});
-document.addEventListener('change',e=>{const t=e.target,d=t.dataset;if(d.k)return setPrm(t);if(d.cf){CF[d.cf]=t.value;return render()}if(d.cy){CYF[d.cy]=t.value;CYL=30;return render()}
+document.addEventListener('change',e=>{const t=e.target,d=t.dataset;if(d.k)return setPrm(t);if(d.cf){CF[d.cf]=t.value;return render()}if(d.ph){PHF[d.ph]=t.value;PHF.n=20;return render()}if(d.cy){CYF[d.cy]=t.value;CYL=30;return render()}
  if(d.c){const v=+t.value,L=LIM[d.c];if(t.value===''||!isFinite(v)||v<L[0]||v>L[1]){t.value=S.cfg[d.c];return toast('Valeur refusée : ce réglage doit être entre '+L[0]+' et '+L[1]+'. Ancienne valeur conservée ('+S.cfg[d.c]+').')}snapCfg();S.cfg[d.c]=v;log('Admin','paramètre',d.c+' = '+v);save()}
  else if(d.p){const[k,q]=d.p.split('.');if(!(+t.value>0))return toast('Valeur invalide');S.sp[k][q]=+t.value;log('Admin','paramètre',k+'.'+q+' = '+t.value);save()}else if(d.f!==undefined){LF=t.value;render()}else if(d.b!==undefined)BTS=t.value;
  else if(t.id=='cap'){const v=+t.value;if(v>=100&&v<=1e7)CAP=v;else{t.value=CAP;toast('Capital : entre 100 et 10 000 000 €')}}else if(t.id=='stu'){S.stk.url=t.value.trim();save()}
@@ -334,7 +334,7 @@ function oppCycle(){const now=Date.now(),c=S.cfg;
 /* AI Supervisor : arbitrage des deux agents (meilleur potentiel net ajusté du risque d'abord, un seul agent par actif) */
 function arbitrate(){const q=PQ.splice(0);if(!q.length)return;q.sort((a,b)=>b.p.rr*b.conf-a.p.rr*a.conf);
  if(q.length>1)log('Supervisor','arbitrage','Priorité : '+q.map(y=>`${y.p.s} ${y.ag=='opp'?'Opportunity':'Scalper'} (R/R net ${f2(y.p.rr)} × score ${y.conf})`).join(' > '));
- const tk={};q.forEach(y=>{const ok=supervise(y.p,tk[y.p.s]?'conflit d\'actif : '+y.p.s+' déjà attribué à '+tk[y.p.s]:'');if(ok)tk[y.p.s]=y.ag=='opp'?'Opportunity Trader':'AI Scalper';y.cb(ok)})}
+ const tk={};q.forEach(y=>{PHX={conf:y.conf,ag:y.ag};const ok=supervise(y.p,tk[y.p.s]?'conflit d\'actif : '+y.p.s+' déjà attribué à '+tk[y.p.s]:'');if(ok)tk[y.p.s]=y.ag=='opp'?'Opportunity Trader':'AI Scalper';y.cb(ok)})}
 function partial(x,fr,why,px){const c=S.cfg,q=x.q*fr,ex=px*(1-c.slip/100),pr=q*ex,fee=pr*c.fee/100,bf=x.fee*fr,pnl=pr-fee-(q*x.e+bf);
  S.cash+=pr-fee;x.q-=q;x.fee-=bf;x.part=1;S.hist.unshift({t:Date.now(),s:x.s,q,e:x.e,x:ex,pnl,fees:bf+fee,why,st:x.st});if(S.hist.length>500)S.hist.length=500;
  log('Opportunity','fermeture',`${x.s} ${why} : ${f2(q,5)} vendu, P&L net ${f2(pnl)} € (frais ${f2(bf+fee)} €)`)}
@@ -661,6 +661,59 @@ newsApply.sent={};
 {const s0=supervise;supervise=function(p,xr){const r=s0(p,xr);try{if(S.newsOn===false||p.st=='manuel'||p.st=='test')return r;const e=(newsApply.pend||{})[p.s],ok=e&&Date.now()-e.t<12e4,w=newsImpact(p.s),vt=S.cfg.newsVeto&&w.veto;
  if(ok||vt){const it=(ok?e.w.it:w.it)[0];log('News','message','Influence sur décision · '+p.s+' · agent influencé : '+(ok?e.ag:agOf(p)=='opp'?'Opportunity':'Scalper')+' · '+(ok?'score '+e.c0+' → '+e.c1+' ('+(e.w.adj>0?'+':'')+e.w.adj+' pt) · ':'')+(vt?'veto prudent (actualité négative importante, non vérifiée) · ':'')+'actualité « '+String(it?it.n.title:'').slice(0,70)+' » · décision finale : '+(r?'autorisé par le Supervisor (contrôles du Risk Manager passés)':'refusé'));if(ok)delete newsApply.pend[p.s]}}catch(x){}return r}}
 const alCard=()=>{const A=S.log.filter(l=>l.ty=='alerte'&&Date.now()-l.t<864e5).slice(0,3);return A.length?'<div class="card"><b class="sm">Alertes importantes (24 h)</b>'+A.map(l=>'<div class="row sm"><span class="g">'+dt(l.t)+'</span><span>'+esc(l.m)+'</span></div>').join('')+'</div>':''};
+/* ===== Phase 7 : tableaux de bord des deux bots, audit du Scalper, historique des propositions ===== */
+const PHMAX=300;let PHX={},PHF={ag:'sc',r:'',n:20};const SKT={};
+function apx(b){const a=(S.ap=S.ap||{})[b]=S.ap[b]||{prop:0,acc:0,ref:0};['exe','exp','det','elig','ign'].forEach(k=>{if(typeof a[k]!='number')a[k]=0});return a}
+function igc(b,k){const a=apx(b);(a.ig=a.ig||{})[k]=(a.ig[k]||0)+1}
+function stName(p){const ag=agOf(p);return ag=='opp'?((OSD[String(p.st).slice(2)]||{n:p.st}).n+(p.tf?' '+TN[p.tf]:'')):ag=='man'?'Manuel':(SD[p.st]?SD[p.st].n:String(p.st))}
+function phPush(e){const L=S.ph=Array.isArray(S.ph)?S.ph:[];e.id=S.pn=(S.pn||0)+1;e.t=Date.now();L.unshift(e);if(L.length>PHMAX)L.length=PHMAX}
+function phAdd(p,R){try{const ag=agOf(p),a=apx(ag),isS=r=>/^AI News|^conflit d'actif/.test(r),o=S.ord[0];
+ R&&R.forEach(r=>{const k=r.replace(/[\d.,]+/g,'#');(a.rj=a.rj||{})[k]=(a.rj[k]||0)+1});
+ phPush({s:p.s,ag,st:stName(p),conf:PHX.conf,e:p.entry,q:p.q,c:p.cost,rk:p.risk,sl:p.sl,tp:p.tp,rr:p.rr,sv:R?R.filter(isS):[],rm:R?R.filter(r=>!isS(r)):[],ok:!R,oid:!R&&o&&o.s==p.s?o.id:0})}catch(e){}}
+function needAtr(st){const c=S.cfg,P=S.sp[st];if(!P)return NaN;const rr=A=>{const en=st=='rev'?1-.3*A:1+c.slip/100,k=en*(2*c.fee/100+c.slip/100),rpu=en-(1-P.slM*A)+k;return rpu>0?((1+P.tpM*A)-en-k)/rpu:0};let lo=0,hi=.5;if(rr(hi)<c.minRR)return Infinity;for(let n=0;n<40;n++){const m=(lo+hi)/2;rr(m)>=c.minRR?hi=m:lo=m}return hi*100}
+function scSkip(a,p){const A=a.i.a/a.p*100,nd=needAtr(a.st),why='R/R net '+f2(p.rr)+' < '+S.cfg.minRR+' (ATR '+f2(A,2)+' % ; ATR minimal requis ≈ '+(isFinite(nd)?f2(nd,2)+' %':'inatteignable')+')';
+ igc('sc','R/R net insuffisant (frais et slippage > mouvement attendu)');apx('sc').ign++;D.sym[a.s]='signal '+a.sig+' ignoré : '+why;
+ const k=a.s+a.st;if(Date.now()-(SKT[k]||0)>6e5){SKT[k]=Date.now();phPush({s:a.s,ag:'sc',st:SD[a.st].n,conf:a.conf,e:p.entry,q:p.q,c:p.cost,rk:p.risk,sl:p.sl,tp:p.tp,rr:p.rr,sv:[],rm:[],ok:null,ign:why,oid:0})}}
+function scNoQ(a){igc('sc','taille nulle (budget alloué ou risque épuisé)');apx('sc').ign++;D.sym[a.s]='signal '+a.sig+' ignoré : taille nulle (budget alloué du Scalper ou risque épuisé)'}
+function bst(b){const o=b=='sc',c=S.cfg,h=S.hist.filter(x=>agOf(x)==b),ps=S.pos.filter(x=>agOf(x)==b),a=apx(b),sm=f=>f.reduce((t,x)=>t+x,0),
+ gain=sm(h.filter(x=>x.pnl>0).map(x=>x.pnl)),loss=sm(h.filter(x=>x.pnl<0).map(x=>x.pnl)),cls=h.filter(x=>!/partielle/.test(x.why)),w=cls.filter(x=>x.pnl>0).length,
+ miss=ps.some(x=>!M[x.s]),lat=miss?null:sm(ps.map(x=>(M[x.s].p-x.e)*x.q)),al=S.init*(o?c.budget:c.oppBudget)/100,net=gain+loss;
+ return{b,st:o?S.scalp:S.opp,gain,loss,net,lat,tot:lat==null?null:net+lat,al,pct:al>0?net/al*100:null,open:ps.length,closed:cls.length,wr:cls.length?w/cls.length*100:null,prop:a.prop,acc:a.acc,exe:a.exe,ref:a.ref,exp:a.exp,
+ ar:a.prop?a.acc/a.prop*100:null,fees:sm(h.map(x=>x.fees))+sm(ps.map(x=>x.fee)),last:S.log.find(l=>l.a==(o?'Scalper':'Opportunity')),cap:S.hist.length>=500}}
+const NA='<span class="g">Non disponible</span>',eur=v=>v==null?NA:'<span class="'+cl(v)+'">'+f2(v)+' €</span>',pc=v=>v==null?NA:'<span class="'+cl(v)+'">'+f2(v)+' %</span>';
+function botCard(b){const s=bst(b),o=b=='sc',nm=o?'AI Scalper':'AI Opportunity Trader',lab={run:'Actif',pause:'Suspendu',stop:'Arrêté'}[s.st];
+ return'<div class="card"><div class="row" style="padding-top:0"><b>'+nm+'</b><b class="'+(s.st=='run'?'up':s.st=='pause'?'':'g')+'">'+lab+'</b></div><div class="sm g">'+esc(o?scState():oppState())+'</div>'
+ +row('Rendement réalisé',eur(s.net))+row('Rendement réalisé (%)',pc(s.pct)+(s.al>0?' <span class="g sm">sur '+f2(s.al,0)+' € alloués</span>':''))+row('Gains réalisés','<span class="up">'+f2(s.gain)+' €</span>')+row('Pertes réalisées','<span class="dn">'+f2(s.loss)+' €</span>')
+ +row('Résultat net réalisé',eur(s.net))+row('Résultat latent (positions ouvertes)',eur(s.lat))+row('Résultat total estimé',eur(s.tot))+row('Positions ouvertes / clôturées',s.open+' / '+s.closed)
+ +row('Propositions d\'achat',s.prop)+row('Ordres acceptés',s.acc)+row('Ordres exécutés',s.exe)+row('Ordres refusés',s.ref)+row('Taux d\'acceptation',s.ar==null?NA:f2(s.ar,0)+' %')
+ +row('Taux de réussite (clôtures)',s.wr==null?NA:f2(s.wr,0)+' %'+(s.closed<30?' <span class="g sm">('+s.closed+' clôture(s) : indicatif)</span>':''))+row('Frais payés',f2(s.fees)+' €')
+ +row('Dernière intervention',s.last?'<span class="sm">'+dt(s.last.t)+' · '+esc(String(s.last.m).slice(0,70))+'</span>':NA)
+ +(s.cap?'<div class="sm g">Historique des ventes plafonné à 500 : les rendements portent sur les ventes conservées.</div>':'')
+ +'<div class="btns"><button data-a="'+(o?'sc':'oc')+'" data-v="run">Démarrer</button><button class="s" data-a="'+(o?'sc':'oc')+'" data-v="pause">Suspendre</button><button class="s" data-a="pg" data-v="'+(o?'scalp':'opp')+'">Accéder aux détails</button></div></div>'}
+function botCards(){const A=bst('sc'),B=bst('opp'),r=(l,f)=>[l,f(A),f(B)],ti=s=>s.tot;
+ return'<h2>Performance des deux bots</h2><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">'+botCard('sc')+botCard('opp')+'</div><div class="card"><b>Comparaison</b>'+tbl(['Indicateur','AI Scalper','AI Opportunity'],[
+ r('Rendement réalisé',s=>eur(s.net)),r('Rendement %',s=>pc(s.pct)),r('Résultat latent',s=>eur(s.lat)),r('Résultat total',s=>eur(s.tot)),r('Positions ouvertes',s=>s.open),r('Opérations clôturées',s=>s.closed),
+ r('Taux de réussite',s=>s.wr==null?NA:f2(s.wr,0)+' %'),r('Propositions',s=>s.prop),r('Acceptations',s=>s.acc),r('Refus',s=>s.ref)])
+ +'<div class="sm g" style="margin-top:6px">Un seul portefeuille virtuel : chaque position, vente et frais n\'appartient qu\'à un bot (jamais compté deux fois). Le % est calculé sur le capital alloué à chaque bot (budget × capital initial : '+S.cfg.budget+' % / '+S.cfg.oppBudget+' %). Total du portefeuille : '+f2(eq())+' € (résultat '+f2(eq()-S.init)+' €, ventes manuelles et frais d\'ordres inclus).</div></div>'}
+function scDiag(){const a=apx('sc'),pq=PQ.filter(x=>x.ag=='sc').length,op=S.ord.filter(o=>o.status=='open'&&agOf(o)=='sc').length,ig=Object.entries(a.ig||{}).sort((x,y)=>y[1]-x[1]),rj=Object.entries(a.rj||{}).sort((x,y)=>y[1]-x[1]);
+ const ST=Object.keys(SD).filter(k=>S.strat[k]),req=ST.length?Math.min(...ST.map(needAtr)):NaN;
+ const at=SY.map(s=>{const i=ind(s);return[s,i?f2(i.a/i.p*100,3)+' %':'—',isFinite(req)?f2(req,2)+' %':'inatteignable',i?(i.a/i.p*100>=req?'<span class="up">suffisant</span>':'<span class="dn">insuffisant</span>'):'—']});
+ const L=(S.ph||[]).filter(e=>(!PHF.ag||e.ag==PHF.ag)&&(PHF.r==''||(PHF.r=='ok'&&e.ok===true)||(PHF.r=='ko'&&e.ok===false)||(PHF.r=='ign'&&e.ok===null)));
+ const hv=e=>e.ok===null?'<b class="g">non transmise</b>':e.ok?'<b class="up">accepté</b>':'<b class="dn">refusé</b>';
+ const sel=(n,arr)=>'<select data-ph="'+n+'">'+arr.map(x=>'<option value="'+x[0]+'" '+(PHF[n]==x[0]?'selected':'')+'>'+x[1]+'</option>').join('')+'</select>';
+ return'<div class="card"><b>Parcours des signaux et des ordres</b> <span class="g sm">(cumulé, conservé après rechargement ; compteurs détaillés comptés depuis cette version)</span>'
+ +row('Détections (une par cycle et par actif)',a.det)+row('Signaux éligibles (score, délai, position libres)',a.elig)+row('Signaux ignorés',Object.values(a.ig||{}).reduce((t,x)=>t+x,0))+ig.map(r=>'<div class="row sm"><span>↳ '+esc(r[0])+'</span><b>'+r[1]+'</b></div>').join('')
+ +row('Propositions transmises au Supervisor',a.prop)+row('Propositions en attente',pq)+row('Propositions acceptées',a.acc)+row('Propositions refusées',a.ref)+row('Ordres créés',a.acc)+row('Ordres exécutés (≥ 1 exécution)',a.exe)+row('Ordres en attente (limite)',op)+row('Ordres expirés',a.exp)+row('Positions ouvertes',S.pos.filter(x=>agOf(x)=='sc').length)+'</div>'
+ +'<div class="card"><b>Répartition des motifs de refus</b><div class="sm g">Refus du Supervisor / Risk Manager, par motif (une proposition peut cumuler plusieurs motifs).</div>'+bars(rj.slice(0,10))+'</div>'
+ +'<div class="card"><b>Pourquoi si peu d\'achats ? Volatilité vs coûts</b><div class="sm g">Coût aller-retour : '+f2(2*S.cfg.fee+S.cfg.slip,2)+' % (frais + slippage). Le R/R net minimal de '+S.cfg.minRR+' exige une volatilité (ATR 1 min) d\'au moins ce niveau pour la stratégie active la plus favorable :</div>'+tbl(['Actif','ATR actuel','ATR requis','Verdict'],at)+'</div>'
+ +'<div class="card"><b>Historique des propositions ('+L.length+')</b><div class="grid">'+sel('ag',[['sc','AI Scalper'],['opp','AI Opportunity'],['','Tous']])+sel('r',[['','Tous résultats'],['ok','Acceptées'],['ko','Refusées'],['ign','Non transmises']])+'</div>'
+ +(L.slice(0,PHF.n).map(e=>'<details style="border-top:1px solid #1677ff22;padding:6px 0"><summary class="sm" style="min-height:32px">'+dt(e.t)+' · <b>'+esc(e.s)+'</b> · '+esc(e.st)+' · '+hv(e)+'</summary><div class="sm">'
+  +row('Bot',AGN[e.ag]||e.ag)+row('Score du signal',e.conf==null?NA:e.conf)+row('Prix d\'entrée',f2(e.e,4)+' €')+row('Quantité',f2(e.q,5))+row('Capital nécessaire',f2(e.c)+' €')+row('Risque financier',f2(e.rk)+' €')+row('Stop-loss / Take-profit',f2(e.sl,4)+' / '+f2(e.tp,4))+row('R/R net',f2(e.rr))
+  +row('Contrôle Supervisor',e.ok===null?'—':e.sv.length?'<span class="dn">refus</span>':'<span class="up">accord</span>')+row('Contrôle Risk Manager',e.ok===null?'—':e.rm.length?'<span class="dn">refus</span>':'<span class="up">validé</span>')
+  +'<div style="margin-top:4px"><b>Motif'+((e.sv.length+e.rm.length)>1?'s':'')+' :</b> '+esc(e.ign||[...e.sv,...e.rm].join(' ; ')||(e.ok?'aucun : ordre '+(e.oid?'n°'+e.oid:'créé')+' — ce contrôle n\'a rien à reprocher':'—'))+'</div></div></details>').join('')||'<p class="g sm">Aucune proposition enregistrée (l\'historique commence avec cette version).</p>')
+ +(L.length>PHF.n?'<div class="btns"><button class="s" data-a="phm">Afficher plus</button></div>':'')+'<div class="sm g">Conservées : les '+PHMAX+' dernières, tous bots confondus.</div></div>'}
+{const d0=diag;diag=function(){return scDiag()+d0()}}
+ACT.phm=()=>{PHF.n+=20;render()};
 /* Start */
 flushFix();head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script></body></html>
