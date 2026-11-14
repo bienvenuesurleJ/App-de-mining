@@ -49,8 +49,8 @@ function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';cl
 function log(a,ty,m){S.log.unshift({t:Date.now(),a,ty,m});if(S.log.length>400)S.log.length=400;if(ty=='alerte')toast(m)}
 /* ===== Market Data Engine (Binance : tickers + bougies 1 min OHLCV) ===== */
 const BS=['https://data-api.binance.vision','https://api.binance.com'];
-async function bj(p){for(const b of BS){try{const r=await fetch(b+p);if(r.ok)return await r.json()}catch(e){}}throw new Error('indisponible')}
-let K={};
+async function bj(p){for(const b of BS){const c=new AbortController(),h=setTimeout(()=>c.abort(),8000);try{const r=await fetch(b+p,{signal:c.signal});if(r.ok)return await r.json()}catch(e){}finally{clearTimeout(h)}}throw new Error('indisponible')}
+let K={},D={rc:0,t:0,an:0,sig:0,prop:0,acc:0,ref:0,rej:{},sym:{},why:'',lr:'',sigT:0};
 async function pull(){try{
  const d=await bj('/api/v3/ticker/24hr?symbols='+encodeURIComponent(JSON.stringify([...SY.map(s=>s+'USDT'),'EURUSDT'])));
  const fx=+d.find(x=>x.symbol=='EURUSDT').lastPrice;if(!(fx>0))throw 0;FX=fx;const now=Date.now();
@@ -123,17 +123,60 @@ function buyer(a){const c=S.cfg,E=eq(),i=a.i,P=S.sp[a.st],p=M[a.s].p,sl=p-P.slM*
  let q=E*c.risk/100/rpu;const av=Math.max(0,E*c.budget/100*(1-S.pos.length/c.maxPos)*(lossy()?.5:1)-engaged());q=Math.min(q,av/(ep*(1+f)),E*.2/ep);
  return mkp(a.s,lim?'limit':'market',lim,sl,tp,q,a.st)}
 /* AI Supervisor : toute proposition passe ici puis par le Risk Engine */
-function supervise(p){log('Buyer','proposition',`${p.s} ${p.type} (${SD[p.st]?SD[p.st].n:p.st}) entrée ${f2(p.entry,4)} SL ${f2(p.sl,4)} TP ${f2(p.tp,4)} qté ${f2(p.q,5)} R/R net ${f2(p.rr)}`);
+function supervise(p){if(p.st!='test')D.prop++;log('Buyer','proposition',`${p.s} ${p.type} (${SD[p.st]?SD[p.st].n:p.st}) entrée ${f2(p.entry,4)} SL ${f2(p.sl,4)} TP ${f2(p.tp,4)} qté ${f2(p.q,5)} R/R net ${f2(p.rr)}`);
  const R=risk(p);if(p.cost<10)R.push('montant < 10 €');
- if(R.length){log('Supervisor','refus',p.s+' refusé : '+R.join(', '));order(p,R);return false}
- log('Risk','validation',p.s+' : risque '+f2(p.risk)+' € dans les limites');log('Supervisor','accord',p.s+' autorisé');order(p);return true}
+ if(R.length){log('Supervisor','refus',p.s+' refusé : '+R.join(', '));if(p.st!='test'){D.ref++;D.lr=R.join(', ');R.forEach(r=>{const k=r.replace(/[\d.,]+/g,'#');D.rej[k]=(D.rej[k]||0)+1})}order(p,R);return false}
+ log('Risk','validation',p.s+' : risque '+f2(p.risk)+' € dans les limites');log('Supervisor','accord',p.s+' autorisé');if(p.st!='test')D.acc++;order(p);return true}
 /* AI Scalper Engine */
-function scalper(){if(S.scalp!='run'||S.emerg||S.halt)return;const now=Date.now();
- if(S.hist.filter(h=>now-h.t<36e5).length+S.pos.length>=S.cfg.maxHr)return;
- const L=SY.map(analyse).filter(a=>a.sig&&a.conf>=S.cfg.minScore&&!S.pos.some(x=>x.s==a.s)&&!S.ord.some(o=>o.s==a.s&&o.status=='open')).sort((a,b)=>b.conf-a.conf),
- ok=L.filter(a=>{const h=S.hist.find(x=>x.s==a.s);return now-(CD[a.s]||0)>S.cfg.cd*(h&&h.pnl<0&&now-h.t<9e5?3:1)*1000});
- if(!ok.length){if(now-(scalper.w||0)>3e5){scalper.w=now;log('Scalper','attente',L.length?'Signaux en délai de protection anti-répétition':'Aucun signal valide sur '+SY.length+' actifs : aucune transaction forcée')}return}
- ok.forEach(a=>{CD[a.s]=now;log('Analyst','analyse',`${a.s} ${a.sig} score ${a.conf}, RSI ${f2(a.r,0)}, MACD ${a.i.mh>0?'+':'−'}, vol ×${f2(a.i.vr)}, ATR ${f2(a.i.a/a.p*100,2)} %`);supervise(buyer(a))})}
+const WN={mom:(i,P)=>i.f<=i.m?'MA5≤MA20':!(i.r>P.rsiLo&&i.r<P.rsiHi)?'RSI '+f2(i.r,0)+' hors '+P.rsiLo+'-'+P.rsiHi:'MACD≤signal',
+rev:(i,P)=>i.r>=P.rsiMax?'RSI '+f2(i.r,0)+' ≥ '+P.rsiMax:i.p>=i.bl?'prix > Bollinger basse':'pas de rebond',
+trend:i=>!(i.p>i.m&&i.m>i.s50)?'pas de tendance haussière':'MACD≤signal',
+brk:(i,P)=>i.p<=i.hh?'pas de cassure 20 min':'volume ×'+f2(i.vr)+' < '+P.vmin,
+vol:(i,P)=>i.ar<P.vx?'ATR ×'+f2(i.ar)+' < '+P.vx:!(i.p>i.m)?'prix sous MA20':'MACD≤signal'};
+function scState(){if(S.emerg)return'Arrêt d\'urgence';if(S.scalp=='stop')return'Arrêté';if(S.scalp=='pause')return'Suspendu'+(S.halt?' (limite atteinte)':'');
+ if(!D.rc)return'Démarrage…';if(bad)return'Binance indisponible : en attente de données';if(Date.now()-D.t>45000)return'ALERTE : aucun cycle depuis '+Math.round((Date.now()-D.t)/1000)+' s';
+ if(!SY.some(s=>ind(s)))return'Collecte de données (aucune donnée exploitable)';
+ if(Date.now()-D.sigT<20000&&D.sig)return'Analyse : '+D.sig+' signal(s) en évaluation';return S.pos.length?'En position ('+S.pos.length+')':'En attente d\'un signal'}
+function ST(k,d){const nf=SY.filter(s=>fresh(s)).length;if(S.emerg&&k!='Admin')return'Suspendu (arrêt d\'urgence)';
+ if(k=='Analyst')return nf?`Actif · ${nf}/${SY.length} actifs à données fraîches`:'Inactif : aucune donnée fraîche';
+ if(k=='Buyer'||k=='Supervisor')return S.scalp=='run'?'Actif (Scalper en marche)':'En veille (Scalper non démarré)';
+ if(k=='Seller')return S.pos.length?`Actif · surveille ${S.pos.length} position(s)`:'En veille : aucune position';
+ if(k=='Risk')return S.halt?'Blocage actif':'Prêt · contrôle chaque ordre';if(k=='Scalper')return scState();return d}
+function scalper(){const now=Date.now(),c=S.cfg;
+ if(S.emerg||S.halt||S.scalp!='run'){D.why=S.emerg?'arrêt d\'urgence actif':S.halt?'blocage : '+S.halt:'Scalper '+(S.scalp=='pause'?'suspendu':'arrêté')+' : aucune analyse';return}
+ D.rc++;D.t=now;D.sym={};D.an=D.sig=0;const cand=[];
+ SY.forEach(s=>{const a=analyse(s);if(!fresh(s)){D.sym[s]='données périmées ou absentes';return}if(!a.i){D.sym[s]='historique insuffisant';return}
+  D.an++;const x=' · ATR '+f2(a.i.a/a.p*100,2)+' % (coût aller-retour '+f2(2*c.fee+c.slip)+' %)';
+  if(!a.sig){D.sym[s]='aucun signal : '+Object.keys(SD).filter(k=>S.strat[k]).map(k=>SD[k].n+' ('+WN[k](a.i,S.sp[k])+')').join(' ; ')+x;return}
+  D.sig++;D.sigT=now;const h=S.hist.find(y=>y.s==s),cd=c.cd*(h&&h.pnl<0&&now-h.t<9e5?3:1)*1000;
+  if(a.conf<c.minScore)D.sym[s]=`signal ${a.sig} ignoré : score ${a.conf} < ${c.minScore}`+x;
+  else if(S.pos.some(y=>y.s==s)||S.ord.some(o=>o.s==s&&o.status=='open'))D.sym[s]='signal '+a.sig+' : position ou ordre déjà ouvert';
+  else if(now-(CD[s]||0)<cd)D.sym[s]='signal '+a.sig+' : délai anti-répétition';else cand.push(a)});
+ if(S.hist.filter(h=>now-h.t<36e5).length+S.pos.length>=c.maxHr){D.why='limite de '+c.maxHr+' transactions/heure atteinte';return}
+ if(!cand.length){D.why=D.an?(D.sig?'signaux présents mais aucun éligible (voir motifs)':'aucune stratégie ne valide son entrée : aucune transaction forcée'):'aucune donnée exploitable';if(now-(scalper.w||0)>3e5){scalper.w=now;log('Scalper','attente',D.why)}return}
+ D.why='';cand.sort((a,b)=>b.conf-a.conf).forEach(a=>{CD[a.s]=now;log('Analyst','analyse',`${a.s} ${a.sig} score ${a.conf}, RSI ${f2(a.r,0)}, MACD ${a.i.mh>0?'+':'−'}, vol ×${f2(a.i.vr)}, ATR ${f2(a.i.a/a.p*100,2)} %`);
+  const ok=supervise(buyer(a));D.sym[a.s]=ok?'proposition acceptée → ordre '+S.ord[0].type:'refusée : '+D.lr;if(!ok)D.why='dernière proposition refusée : '+D.lr})}
+function diag(){const rs=Object.entries(D.rej).sort((a,b)=>b[1]-a[1]),T=(S.tests||[])[0];
+ return`<div class="card"><b>Diagnostic en temps réel</b> <span class="g sm">(compteurs depuis l'ouverture de la page)</span>${row('État du Scalper',scState())}${row('Cycles d\'analyse',D.rc+(D.t?' · dernier il y a '+Math.round((Date.now()-D.t)/1000)+' s':''))}${row('Actifs analysés (cycle)',D.an+' / '+SY.length)}${row('Signaux détectés (cycle)',D.sig)}${row('Propositions d\'achat',D.prop)}${row('Ordres acceptés',D.acc)}${row('Ordres refusés',D.ref)}${row('Positions ouvertes',S.pos.length)}${row('Ventes effectuées',S.hist.length)}<div class="sm" style="margin-top:6px"><b>Motif sans achat :</b> ${esc(D.why||'—')}</div>${SY.map(s=>`<div class="row sm"><span>${s}</span><span class="g" style="text-align:right">${esc(D.sym[s]||'—')}</span></div>`).join('')}${rs.length?'<div class="sm" style="margin-top:6px"><b>Motifs de refus (Supervisor / Risk Manager) :</b></div>'+rs.map(r=>`<div class="row sm"><span>${esc(r[0])}</span><b>${r[1]}</b></div>`).join(''):''}${D.lr?'<div class="sm g">Dernier refus : '+esc(D.lr)+'</div>':''}</div>
+<div class="card"><div class="btns"><button data-a="selftest">TEST DU MOTEUR</button></div><div class="sm g">Exécute le vrai moteur (Supervisor, Risk, ordres, exécution, sorties) sur un portefeuille isolé et un prix fictif <b>TEST</b>. Rien n'est ajouté à votre cash, à l'historique ni aux statistiques du Scalper.</div>${T?`<div class="row"><b>TEST · ${dt(T.t)}</b><b class="${T.ok?'up':'dn'}">${T.ok?'RÉUSSI':'ÉCHEC'}</b></div>`+T.R.map(r=>`<div class="row sm"><span>${r.ok?'✔':'✘'} ${esc(r.n)}</span><span class="g">${esc(r.d)}</span></div>`).join(''):''}</div>`}
+function selfTest(){const sv=S,mv=M,R=[],chk=(n,c,d)=>R.push({n,ok:!!c,d:d||''});
+ try{S=JSON.parse(JSON.stringify(sv));Object.assign(S,{log:[],pos:[],ord:[],hist:[],al:[],emerg:false,halt:null,cash:10000,init:10000,peak:10000,dayStart:10000,day:new Date().toDateString()});Object.assign(S.cfg,{fee:.1,slip:.05,risk:.25,minRR:1.2,maxPos:5,stale:60});
+  M={TEST:{p:100,chg:0,vol:1e6,t:Date.now()}};const f=.001,sl=.0005,p=mkp('TEST','market',0,98,104,10,'test'),ent=100*(1+sl),cost=10*ent,fee=cost*f;
+  chk('Achat accepté par Supervisor + Risk Manager',supervise(p),'risque '+f2(p.risk)+' €, R/R net '+f2(p.rr));
+  chk('Ordre exécuté, position virtuelle ouverte',S.pos.length==1&&S.ord[0].status=='filled',S.pos[0]?f2(S.pos[0].q,2)+' @ '+f2(S.pos[0].e,4)+' €':'');
+  chk('Cash débité (prix + frais)',Math.abs(S.cash-(10000-cost-fee))<1e-6,'cash '+f2(S.cash)+' €');
+  M.TEST.p=104.5;monitor();let h=S.hist[0];const pnl=10*104.5*(1-sl)*(1-f)-(cost+fee);
+  chk('Hausse fictive 104,50 € → take-profit',h&&h.why=='take-profit'&&!S.pos.length,'vente virtuelle');
+  chk('Gain net exact (frais et slippage inclus)',h&&Math.abs(h.pnl-pnl)<1e-6,'P&L '+(h?f2(h.pnl):'?')+' € (attendu '+f2(pnl)+')');
+  chk('Cash = portefeuille = 10 000 + gain',Math.abs(S.cash-(10000+pnl))<1e-6&&Math.abs(eq()-S.cash)<1e-9,'cash '+f2(S.cash)+' €');
+  chk('Vente enregistrée dans l\'historique',S.hist.length==1,S.hist.length+' ligne');
+  M.TEST.p=100;supervise(mkp('TEST','market',0,98,104,10,'test'));M.TEST.p=97.5;monitor();h=S.hist[0];
+  chk('Baisse fictive 97,50 € → stop-loss, perte calculée',h&&h.why=='stop-loss'&&h.pnl<0,'P&L '+(h?f2(h.pnl):'?')+' €');
+  chk('Ordre trop risqué refusé',!supervise(mkp('TEST','market',0,90,104,100,'test')),S.log[0]?S.log[0].m:'');
+  M.TEST.t=Date.now()-1e6;chk('Donnée périmée refusée',!supervise(mkp('TEST','market',0,98,104,10,'test')),'');M.TEST.t=Date.now();
+  S.emerg=true;chk('Arrêt d\'urgence bloque les achats',!supervise(mkp('TEST','market',0,98,104,10,'test')),'')}
+ catch(e){chk('Exécution du test',false,e.message)}finally{S=sv;M=mv}
+ (S.tests=S.tests||[]).unshift({t:Date.now(),ok:R.every(r=>r.ok),R});S.tests.length=Math.min(S.tests.length,3)}
 /* ===== Alert Engine ===== */
 const AT={up:'Prix ≥ (€)',dn:'Prix ≤ (€)',chg:'Variation 24 h ≥ (%)',vol:'Volatilité ATR ≥ (% du prix)',buy:'Signal d\'achat',sell:'Signal de sortie (position ouverte)',sl:'Stop-loss touché',tp:'Take-profit touché'};
 function fire(a,m){a.last=Date.now();log('Alertes','alerte',a.s+' : '+m)}
@@ -147,7 +190,7 @@ async function tick(){if(tick.b)return;tick.b=1;try{await pull();orders();monito
 /* ===== UI ===== */
 const AG={on:{run:'En marche',pause:'Suspendu',stop:'Arrêté'}};
 const PG=[['dash','Accueil'],['agents','Agents'],['port','Portefeuille'],['set','Réglages'],['scalp','Scalper'],['mkts','Marchés'],['news','Actus'],['strat','Stratégies'],['ord','Ordres'],['alerts','Alertes'],['stk','Actions'],['bt','Backtest'],['log','Journal']];
-function head(){const E=eq();$('header').innerHTML=`<h1>AI Trading Central <span>BlackBlue</span></h1><b>${f2(E)} €</b><span class="${cl(E-S.init)} sm">${f2((E-S.init)/S.init*100)} %</span><button class="${S.emerg?'s':'d'}" data-a="em">${S.emerg?'Lever l\'arrêt':'Arrêt d\'urgence'}</button>`;
+function head(){const E=eq();$('header').innerHTML=`<h1>AI Trading Central <span>BlackBlue</span><div class="sm g" style="font-weight:400">Scalper : ${scState()}</div></h1><b>${f2(E)} €</b><span class="${cl(E-S.init)} sm">${f2((E-S.init)/S.init*100)} %</span><button class="${S.emerg?'s':'d'}" data-a="em">${S.emerg?'Lever l\'arrêt':'Arrêt d\'urgence'}</button>`;
  $('nav').innerHTML=PG.map(p=>`<button class="${p[0]==page?'on':''}" data-a="pg" data-v="${p[0]}">${p[1]}</button>`).join('')}
 const row=(l,v)=>`<div class="row"><span class="g">${l}</span><b>${v}</b></div>`,card=(l,v,c='')=>`<div class="card"><div class="g sm">${l}</div><div class="big ${c}">${v}</div></div>`;
 function chart(a){if(a.length<2)return'<p class="g">Courbe en construction (un point toutes les 10 s).</p>';const w=600,h=150,v=a.map(x=>x[1]),lo=Math.min(...v),hi=Math.max(...v),r=hi-lo||1;
@@ -156,7 +199,7 @@ function banners(){return(S.emerg?'<div class="bad">Arrêt d\'urgence actif : au
 function stats(k){const h=k?S.hist.filter(x=>x.st==k):S.hist,w=h.filter(x=>x.pnl>0),l=h.filter(x=>x.pnl<=0),sw=w.reduce((t,x)=>t+x.pnl,0),sl=l.reduce((t,x)=>t+x.pnl,0);return{n:h.length,sw,sl,net:sw+sl,fees:h.reduce((t,x)=>t+x.fees,0),wr:h.length?w.length/h.length*100:0}}
 const hrow=h=>`<div class="row"><span>${esc(h.s)} <span class="g sm">${esc(h.why)} · ${dt(h.t)}</span></span><b class="${cl(h.pnl)}">${f2(h.pnl)} €</b></div>`;
 const PAGES={
-dash(){const E=eq(),st=stats(),run=S.scalp=='run'?1:0;return banners()+`<div class="grid">${card('Valeur du portefeuille',f2(E)+' €')}${card('Cash',f2(S.cash)+' €')}${card('Capital engagé',f2(engaged())+' €')}${card('Résultat total',f2(E-S.init)+' €',cl(E-S.init))}${card('Aujourd\'hui',f2(E-S.dayStart)+' €',cl(E-S.dayStart))}${card('Positions ouvertes',S.pos.length)}${card('Agents en marche',run+' / 1 actif · Supervisor '+(S.emerg?'bloqué':'actif'))}${card('Drawdown',f2((S.peak-E)/S.peak*100)+' %')}</div>
+dash(){const E=eq(),st=stats(),run=S.scalp=='run'?1:0;return banners()+`<div class="grid">${card('Valeur du portefeuille',f2(E)+' €')}${card('Cash',f2(S.cash)+' €')}${card('Capital engagé',f2(engaged())+' €')}${card('Résultat total',f2(E-S.init)+' €',cl(E-S.init))}${card('Aujourd\'hui',f2(E-S.dayStart)+' €',cl(E-S.dayStart))}${card('Positions ouvertes',S.pos.length)}${card('Scalper',scState())}${card('Drawdown',f2((S.peak-E)/S.peak*100)+' %')}</div>
 <h2>Évolution du portefeuille</h2><div class="card">${chart(S.eq.slice(-200))}</div><h2>Dernières transactions</h2><div class="card">${S.hist.slice(0,5).map(hrow).join('')||'<p class="g">Aucune transaction. Démarrez le Scalper dans l\'onglet Scalper : il n\'ouvre une position que si une stratégie valide un signal (pas de transaction forcée).</p>'}</div>
 <p class="g sm">Simulation uniquement, aucun argent réel. Aucun bénéfice n\'est garanti. Les agents ne travaillent que lorsque cette page est ouverte.</p>`},
 agents(){const last=a=>{const l=S.log.find(x=>x.a==a);return l?esc(l.m):'<span class="g">aucune activité</span>'},E=eq();
@@ -164,18 +207,18 @@ agents(){const last=a=>{const l=S.log.find(x=>x.a==a);return l?esc(l.m):'<span c
  ['AI Analyst','RSI, MACD, Bollinger, ATR, volumes et moyennes sur bougies 1 min.',SY.every(s=>(H[s]||[]).length>=21)?'Actif':'Collecte de données','Analyst'],['AI News','Actualités crypto (CryptoCompare, non vérifiées).',NEWS&&NEWS!='err'&&NEWS!='load'?'Chargé':'Non chargé','News'],
  ['AI Buyer','Calcule taille, entrée, stop-loss, take-profit et frais.','Actif','Buyer'],['AI Seller','Stop-loss, take-profit, trailing stop, sortie à 20 min.','Actif','Seller'],['AI Risk Manager','Règles déterministes : risque, exposition, pertes, drawdown, données périmées.',S.halt?'Blocage actif':'Actif','Risk'],
  ['AI Portfolio Manager','Capital, cash, exposition : '+f2(engaged()/E*100)+' % engagé.','Actif','Portfolio'],['AI Scalper','Scalping adaptatif sur 7 cryptos.',AG.on[S.scalp],'Scalper']];
- return banners()+A.map(a=>`<div class="card"><div class="row" style="padding-top:0"><b>${a[0]}</b><span class="g">${a[2]}</span></div><div class="sm g">${a[1]}</div><div class="sm" style="margin-top:6px">Dernière action : ${last(a[3])}</div></div>`).join('')+
+ A.forEach(a=>a[2]=ST(a[3],a[2]));return banners()+diag()+A.map(a=>`<div class="card"><div class="row" style="padding-top:0"><b>${a[0]}</b><span class="g">${a[2]}</span></div><div class="sm g">${a[1]}</div><div class="sm" style="margin-top:6px">Dernière action : ${last(a[3])}</div></div>`).join('')+
  `<h2>Échanges entre agents</h2><div class="card">${S.log.filter(l=>['analyse','proposition','validation','accord','refus','exécution','fermeture'].includes(l.ty)).slice(0,14).map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')} · ${l.a}</span><span class="${l.ty=='refus'?'dn':''}">${esc(l.m)}</span></div>`).join('')||'<p class="g">Aucun échange pour l\'instant.</p>'}</div>`},
-port(){const E=eq(),st=stats(),unr=S.pos.reduce((t,x)=>t+(M[x.s]?(M[x.s].p-x.e)*x.q:0),0);
- return banners()+`<div class="card">${row('Capital initial',f2(S.init)+' €')}${row('Valeur totale',f2(E)+' €')}${row('Liquidités',f2(S.cash)+' €')}${row('Capital engagé',f2(engaged())+' €')}${row('Gains réalisés','<span class=up>'+f2(st.sw)+' €</span>')}${row('Pertes réalisées','<span class=dn>'+f2(st.sl)+' €</span>')}${row('Gains non réalisés','<span class="'+cl(unr)+'">'+f2(unr)+' €</span>')}${row('Frais payés',f2(st.fees)+' €')}${row('Résultat net',`<span class="${cl(E-S.init)}">${f2(E-S.init)} €</span>`)}</div>
+port(){const pl=S.pos.map(x=>M[x.s]?(M[x.s].p-x.e)*x.q:0),ug=pl.filter(v=>v>0).reduce((a,b)=>a+b,0),ul=pl.filter(v=>v<0).reduce((a,b)=>a+b,0),ob=S.ord.find(o=>o.filled>0),hs=S.hist[0],lb=ob?`${ob.s} ${f2(ob.filled,5)} @ ${f2(ob.type=='limit'?ob.lim:ob.entry,4)} € · ${dt(ob.t)}`:'aucun',ls=hs?`${hs.s} @ ${f2(hs.x,4)} € · ${hs.why} · <span class="${cl(hs.pnl)}">${f2(hs.pnl)} €</span>`:'aucune',E=eq(),st=stats(),unr=S.pos.reduce((t,x)=>t+(M[x.s]?(M[x.s].p-x.e)*x.q:0),0);
+ return banners()+`<div class="card">${row('Capital initial',f2(S.init)+' €')}${row('Valeur totale',f2(E)+' €')}${row('Liquidités',f2(S.cash)+' €')}${row('Capital engagé',f2(engaged())+' €')}${row('Gains réalisés','<span class=up>'+f2(st.sw)+' €</span>')}${row('Pertes réalisées','<span class=dn>'+f2(st.sl)+' €</span>')}${row('Gains latents','<span class=up>'+f2(ug)+' €</span>')}${row('Pertes latentes','<span class=dn>'+f2(ul)+' €</span>')}${row('Latent net','<span class="'+cl(unr)+'">'+f2(unr)+' €</span>')}${row('Dernier achat',lb)}${row('Dernière vente',ls)}${row('Frais payés',f2(st.fees)+' €')}${row('Résultat net',`<span class="${cl(E-S.init)}">${f2(E-S.init)} €</span>`)}</div>
 <h2>Positions ouvertes</h2>${S.pos.map(x=>{const p=M[x.s]?M[x.s].p:x.e,pl=(p-x.e)*x.q;return`<div class="card"><div class="row" style="padding-top:0"><b>${x.s} · ${esc(x.st)}</b><b class="${cl(pl)}">${f2(pl)} €</b></div><div class="sm g">Qté ${f2(x.q,5)} · entrée ${f2(x.e,4)} € · actuel ${f2(p,4)} €${fresh(x.s)?'':' · <span class=dn>donnée périmée</span>'}<br>SL ${f2(x.sl,4)} € · TP ${f2(x.tp,4)} €</div><div class="btns"><button class="s" data-a="close" data-v="${x.id}">Fermer</button></div></div>`}).join('')||'<p class="g">Aucune position.</p>'}
 <h2>Historique</h2><div class="card">${S.hist.slice(0,30).map(hrow).join('')||'<p class="g">Aucune opération.</p>'}</div>`},
 mkts(){return banners()+`<div class="card sm g">Source : Binance (données publiques), interrogées toutes les 10 s : quasi temps réel, pas du tick-by-tick. Prix convertis USDT → € avec le cours EURUSDT${FX?' ('+f2(FX,4)+')':''}. <b>Actions et ETF : non connectés</b> — aucune source gratuite fiable n'est accessible depuis un fichier HTML seul sans clé API ; un backend serait nécessaire.</div>`+SY.map(s=>{const m=M[s],a=analyse(s);return`<div class="card"><div class="row" style="padding-top:0"><b>${s}</b><b>${m?f2(m.p,m.p<1?5:2)+' €':'indisponible'}</b></div>${m?`<div class="sm g">24 h <span class="${cl(m.chg)}">${f2(m.chg)} %</span> · volume ${f2(m.vol/1e6,1)} M€ · tendance ${a.f==null?'n/a (données insuffisantes)':a.f>a.m?'haussière':'baissière'}${a.i?' · RSI '+f2(a.r,0)+' · ATR '+f2(a.i.a/a.p*100,2)+' % · vol ×'+f2(a.i.vr):''} · maj il y a ${Math.round((Date.now()-m.t)/1000)} s${fresh(s)?'':' · <span class=dn>PÉRIMÉE</span>'}</div>`:''}</div>`}).join('')},
 scalp(){const E=eq(),st=stats(),al=E*S.cfg.budget/100,en=engaged(),sg=S.log.filter(l=>['Analyst','Scalper','Supervisor'].includes(l.a)).slice(0,12);
- return banners()+`<div class="card"><div class="row" style="padding-top:0"><b>État</b><b>${AG.on[S.scalp]}</b></div><div class="btns"><button data-a="sc" data-v="run">Démarrer</button><button class="s" data-a="sc" data-v="pause">Suspendre</button><button class="s" data-a="sc" data-v="stop">Arrêter</button><button class="d" data-a="closeall">Fermer les positions</button></div>
+ return banners()+`<div class="card"><div class="row" style="padding-top:0"><b>État</b><b>${scState()}</b></div><div class="btns"><button data-a="sc" data-v="run">Démarrer</button><button class="s" data-a="sc" data-v="pause">Suspendre</button><button class="s" data-a="sc" data-v="stop">Arrêter</button><button class="d" data-a="closeall">Fermer les positions</button></div>
 <div class="sm g">Horizon : bougies 1 min, 5 stratégies, sorties à 20 min maximum, protection anti-répétition. Budget adaptatif : il baisse avec le nombre de positions ouvertes et est divisé par deux après 3 pertes consécutives. Il n'augmente jamais pour compenser une perte.</div></div>
 <div class="card">${row('Capital alloué (max)',f2(al)+' €')}${row('Capital disponible',f2(Math.max(0,al-en))+' €')}${row('Positions ouvertes',S.pos.length)}${row('Opérations',st.n)}${row('Gains / pertes',f2(st.sw)+' € / '+f2(st.sl)+' €')}${row('Résultat net',`<span class="${cl(st.net)}">${f2(st.net)} €</span>`)}${row('Taux de réussite',f2(st.wr,0)+' %')}${row('Frais payés',f2(st.fees)+' €')}${row('Drawdown portefeuille',f2((S.peak-E)/S.peak*100)+' %')}</div>
-<h2>Stratégies</h2><div class="card"><div class="btns">${Object.keys(SD).map(k=>`<button class="${S.strat[k]?'':'s'}" data-a="st" data-v="${k}">${SD[k].n} : ${S.strat[k]?'actif':'inactif'}</button>`).join('')}</div><div class="sm g">Aucune performance n'est présentée comme acquise : consultez les résultats réels de la simulation ci-dessus.</div></div>
+${diag()}<h2>Stratégies</h2><div class="card"><div class="btns">${Object.keys(SD).map(k=>`<button class="${S.strat[k]?'':'s'}" data-a="st" data-v="${k}">${SD[k].n} : ${S.strat[k]?'actif':'inactif'}</button>`).join('')}</div><div class="sm g">Aucune performance n'est présentée comme acquise : consultez les résultats réels de la simulation ci-dessus.</div></div>
 <h2>Derniers signaux</h2><div class="card">${sg.map(l=>`<div class="row sm"><span class="g">${new Date(l.t).toLocaleTimeString('fr-FR')}</span><span>${esc(l.m)}</span></div>`).join('')||'<p class="g">Aucun signal.</p>'}</div>
 <h2>Dernières opérations</h2><div class="card">${S.hist.slice(0,6).map(hrow).join('')||'<p class="g">Aucune.</p>'}</div>`},
 news(){let b='';if(NEWS=='load')b='<p class="g">Chargement…</p>';else if(NEWS=='err')b='<div class="bad">Actualités indisponibles (source injoignable). Aucune actualité n\'est inventée.</div>';else if(NEWS)b=NEWS.map(n=>`<div class="card"><b>${esc(n.title)}</b><div class="sm g">${esc(n.source)} · ${dt(n.published_on*1000)} · non vérifié par l'application</div>${/^https:\/\//.test(n.url)?`<a class="sm" style="color:var(--bl)" href="${esc(n.url)}" target="_blank" rel="noopener">Lire la source</a>`:''}</div>`).join('');
@@ -191,14 +234,14 @@ function render(){$('main').innerHTML=PAGES[page]()}
 const ACT={
 em(){if(S.emerg){S.emerg=false;log('Admin','paramètre','Arrêt d\'urgence levé ; Scalper toujours arrêté')}else{S.emerg=true;S.scalp='stop';cancelAll();log('Admin','alerte','ARRÊT D\'URGENCE : nouvelles opérations bloquées, agents suspendus, positions conservées')}done()},
 pg(v){page=v;if(v=='news'&&!NEWS)return ACT.news();head();render();scrollTo(0,0)},
-sc(v){if(v=='run'&&(S.emerg||S.halt))return toast('Démarrage impossible : '+(S.emerg?'arrêt d\'urgence actif':S.halt));S.scalp=v;log('Scalper','état','Scalper : '+AG.on[v]);done()},
+sc(v){if(v=='run'&&(S.emerg||S.halt))return toast('Démarrage impossible : '+(S.emerg?'arrêt d\'urgence actif':S.halt));S.scalp=v;if(v=='run'){D.rc=0;D.sym={};D.why='démarrage en cours'}log('Scalper','état','Scalper : '+AG.on[v]);done();if(v=='run')tick()},
 closeall(){[...S.pos].forEach(x=>fresh(x.s)&&close(x,'fermeture manuelle',M[x.s].p));if(S.pos.length)toast('Certaines positions n\'ont pas pu être fermées : données périmées');done()},
 close(v){const x=S.pos.find(p=>p.id==v);if(x&&fresh(x.s))close(x,'fermeture manuelle',M[x.s].p);else toast('Donnée périmée : fermeture impossible');done()},
 st(v){S.strat[v]=!S.strat[v];log('Admin','paramètre','stratégie '+v+' = '+S.strat[v]);done()},
 unhalt(){const E=eq();S.halt=null;S.peak=E;S.dayStart=E;log('Admin','paramètre','Blocage levé, références réinitialisées à '+f2(E)+' €');done()},
 reset(){if(!confirm('Réinitialiser le portefeuille, l\'historique et le journal ?'))return;const c=S.cfg;S=DEF();S.cfg=c;S.init=S.cash=S.peak=S.dayStart=CAP>0?CAP:10000;CAP=S.init;S.eq=[];done()},
 exp(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download='ai-trading-central-'+new Date().toISOString().slice(0,10)+'.json';a.click()},
-news(){loadNews()},bt(){runBt()}};
+news(){loadNews()},bt(){runBt()},selftest(){selfTest();done()}};
 function done(){save();head();render()}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-a]');if(b&&ACT[b.dataset.a])ACT[b.dataset.a](b.dataset.v)});
 document.addEventListener('change',e=>{const t=e.target,d=t.dataset;
@@ -234,5 +277,5 @@ ACT.atg=v=>{const a=S.al.find(x=>x.id==v);if(a)a.on=!a.on;done()};ACT.adel=v=>{S
 PAGES.stk=()=>{const ok=Array.isArray(STK);return`<div class="${ok?'card':'warn'}"><b>Statut : ${ok?'connecté (lecture seule)':'non connecté'}</b><div class="sm g" style="margin-top:6px">Aucune donnée d'actions ou d'ETF n'est affichée sans source réelle. Aucun ordre n'est possible sur les actions dans cette version. Ne saisissez jamais de clé API ici : elle doit rester sur votre propre backend ou proxy (par ex. une fonction cloud), dont vous indiquez l'URL HTTPS. Il doit répondre à <code>?symbols=AAPL,MSFT</code> par un JSON <code>[{"symbol","price","time"(ms)}]</code>.</div></div><div class="card"><label>URL du proxy de données</label><input id="stu" type="url" placeholder="https://…" value="${esc(S.stk.url)}"><div class="btns"><button data-a="stk">Tester la connexion</button></div></div>`+(STK=='load'?'<p class="g">Test…</p>':STK=='err'?'<div class="bad">Connexion échouée ou réponse invalide : actions non connectées.</div>':ok?`<div class="card">${STK.map(x=>`<div class="row"><b>${esc(x.symbol)}</b><span>${f2(x.price)} · ${dt(x.time)}${Date.now()-x.time>9e5?' · <span class=dn>périmée</span>':''}</span></div>`).join('')}<div class="sm g">Source : ${esc(new URL(S.stk.url).host)} · données possiblement différées</div></div>`:'')};
 ACT.stk=async()=>{if(!/^https:\/\//.test(S.stk.url))return toast('URL HTTPS requise');STK='load';render();try{const j=await(await fetch(S.stk.url+(S.stk.url.includes('?')?'&':'?')+'symbols=AAPL,MSFT,SPY')).json();if(!Array.isArray(j)||!j.length||j.some(x=>!x.symbol||!(x.price>0)||!(x.time>0)))throw 0;STK=j}catch(e){STK='err'}render()};
 /* Start */
-head();render();tick();setInterval(tick,10000);
+head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script></body></html>
