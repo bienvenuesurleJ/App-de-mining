@@ -199,7 +199,7 @@ function alerts(){const now=Date.now();S.al.forEach(a=>{if(!a.on||now-(a.last||0
  else if(a.ty=='vol'&&i&&i.a/i.p*100>=a.v)fire(a,'volatilité ATR '+f2(i.a/i.p*100,3)+' %');
  else if(a.ty=='buy'){const g=analyse(a.s);if(g.sig)fire(a,'signal '+g.sig+' (score '+g.conf+')')}
  else if(a.ty=='sell'){const x=S.pos.find(p=>p.s==a.s);if(x&&i&&SD[x.st]&&SD[x.st].x(i))fire(a,'signal de sortie sur position ouverte')}})}
-async function tick(){if(tick.b)return;tick.b=1;try{TK=Date.now();await pull();await pullHT();newsTick();cycBegin();try{orders();monitor();limits();alerts();scalper();oppCycle();arbitrate()}finally{cycEnd()}S.eq.push([Date.now(),eq()]);if(S.eq.length>500)S.eq.shift();save();head();if(!['set','bt','ord','alerts','stk','strat','lab'].includes(page))render()}finally{tick.b=0}}
+async function tick(){if(tick.b)return;tick.b=1;try{TK=Date.now();await pull();await pullHT();newsTick();cycBegin();try{orders();monitor();limits();alerts();scalper();oppCycle();arbitrate()}finally{cycEnd()}S.eq.push([Date.now(),eq()]);if(S.eq.length>500)S.eq.shift();save();head();if(!['set','bt','ord','alerts','stk','strat','lab','opt'].includes(page))render()}finally{tick.b=0}}
 /* ===== UI ===== */
 const AG={on:{run:'En marche',pause:'Suspendu',stop:'Arrêté'}};
 const PG=[['dash','Accueil'],['agents','Agents'],['port','Portefeuille'],['set','Réglages'],['scalp','Scalper'],['opp','Opportunity'],['mkts','Marchés'],['news','Actus'],['strat','Stratégies'],['ord','Ordres'],['alerts','Alertes'],['stk','Actions'],['bt','Backtest'],['log','Journal']];
@@ -304,8 +304,8 @@ rvs:{n:'Détection de retournement',t:2.5,c:[['RSI < 40',i=>i.r<40],['MACD en re
 vol:{n:'Analyse de volatilité',t:2.5,c:[['expansion ATR(5)/ATR(30) ≥ 1,5',i=>i.ar>=1.5],['prix > MA20',i=>i.p>i.m],['MACD > signal',i=>i.mh>0]],x:i=>i.p<i.m}};
 OKY.forEach(k=>OSD[k].e=i=>OSD[k].c.every(c=>c[1](i)));
 const freshT=(s,t)=>{const k=KT[s]&&KT[s][t];return!!k&&k.length>=60&&Date.now()-k.t<HTSTALE},tfi=(s,t)=>freshT(s,t)?ti(KT[s][t],s):null;
-async function pullHT(){if(!(S.opp=='run'||S.pos.some(x=>agOf(x)=='opp'))||!FX||Date.now()-HT.t<9e4)return;HT.t=Date.now();let fail=0;const now=Date.now();
- await Promise.all(SY.flatMap(s=>TFS.map(async t=>{try{const k=(await bj('/api/v3/klines?symbol='+s+'USDT&interval='+t+'&limit=120')).map(x=>({h:+x[2]/FX,l:+x[3]/FX,c:+x[4]/FX,v:+x[5],ct:x[6]})).filter(x=>x.ct<now);k.t=now;(KT[s]=KT[s]||{})[t]=k}catch(e){fail++}})));
+async function pullHT(){const wo=S.opp=='run'||S.pos.some(x=>agOf(x)=='opp');if(!(wo||S.scalp=='run')||!FX||Date.now()-HT.t<9e4)return;HT.t=Date.now();let fail=0;const now=Date.now(),TL=wo?TFS:['1h','4h'];
+ await Promise.all(SY.flatMap(s=>TL.map(async t=>{try{const k=(await bj('/api/v3/klines?symbol='+s+'USDT&interval='+t+'&limit=120')).map(x=>({h:+x[2]/FX,l:+x[3]/FX,c:+x[4]/FX,v:+x[5],ct:x[6]})).filter(x=>x.ct<now);k.t=now;(KT[s]=KT[s]||{})[t]=k}catch(e){fail++}})));
  HT.err=fail?fail+' requête(s) Binance échouée(s)':''}
 function ti(k,s){if(!k||k.length<60)return null;const c=k.map(x=>x.c),n=c.length,e12=ema(c,12),e26=ema(c,26),ml=e12.map((x,j)=>x-e26[j]),sg=ema(ml,9),m=sma(c,20),b=sd(c.slice(-20)),pv=k.slice(-21,-1),rc=k.slice(-20);
  return{p:s&&fresh(s)?M[s].p:c[n-1],pc:c[n-1],r:rsi(c),m,s50:sma(c,50),mh:ml[n-1]-sg[n-1],mhp:ml[n-2]-sg[n-2],bu:m+2*b,bl:m-2*b,a:atr(k,14),ar:atr(k,5)/atr(k,30),vr:k[n-1].v/(pv.reduce((t,x)=>t+x.v,0)/20),hh:Math.max(...rc.map(x=>x.h)),ll:Math.min(...rc.map(x=>x.l)),ct:k[n-1].ct}}
@@ -333,8 +333,8 @@ function oppCycle(){const now=Date.now(),c=S.cfg;
  OD.why=PQ.some(x=>x.ag=='opp')?'':OD.an?(OD.sig?'opportunités présentes mais aucune éligible (voir motifs)':'aucune stratégie ne valide son entrée sur les 4 horizons : aucune transaction forcée'):'aucune donnée exploitable'}
 /* AI Supervisor : arbitrage des deux agents (meilleur potentiel net ajusté du risque d'abord, un seul agent par actif) */
 function arbitrate(){const q=PQ.splice(0);if(!q.length)return;q.sort((a,b)=>tmKey(b)-tmKey(a));
- if(q.length>1)log('Supervisor','arbitrage','Priorité : '+q.map(y=>`${y.p.s} ${y.ag=='opp'?'Opportunity':'Scalper'} (score collectif ${y.sc==null?'n/d':y.sc}, R/R net ${f2(y.p.rr)})`).join(' > '));
- const tk={};q.forEach(y=>{PHX={conf:y.conf,ag:y.ag};const ok=supervise(y.p,tk[y.p.s]?'conflit d\'actif : '+y.p.s+' déjà attribué à '+tk[y.p.s]:'');if(ok)tk[y.p.s]=y.ag=='opp'?'Opportunity Trader':'AI Scalper';y.cb(ok)})}
+ if(q.length>1)log('Supervisor','arbitrage','Priorité : '+q.map(y=>`${y.p.s} ${y.ag=='opp'?'Opportunity':'Scalper'} (score collectif ${y.sc==null?'n/d':y.sc}${y.p.tm&&y.p.tm.cal?'':', indicatif'}, R/R net ${f2(y.p.rr)})`).join(' > '));
+ const tk={};q.forEach(y=>{PHX={conf:y.conf,ag:y.ag};const w=tk[y.p.s],ok=supervise(y.p,w?'conflit d\'actif : '+y.p.s+' déjà attribué à '+w.n+' (score collectif '+w.sc+' contre '+(y.sc==null?'n/d':y.sc)+') ; une seule position par actif':'');if(ok)tk[y.p.s]={n:y.ag=='opp'?'Opportunity Trader':'AI Scalper',sc:y.sc==null?'n/d':y.sc};y.cb(ok)})}
 function partial(x,fr,why,px){const c=S.cfg,q=x.q*fr,ex=px*(1-c.slip/100),pr=q*ex,fee=pr*c.fee/100,bf=x.fee*fr,pnl=pr-fee-(q*x.e+bf);
  S.cash+=pr-fee;x.q-=q;x.fee-=bf;x.part=1;S.hist.unshift({t:Date.now(),s:x.s,q,e:x.e,x:ex,pnl,fees:bf+fee,why,st:x.st});if(S.hist.length>500)S.hist.length=500;
  log('Opportunity','fermeture',`${x.s} ${why} : ${f2(q,5)} vendu, P&L net ${f2(pnl)} € (frais ${f2(bf+fee)} €)`)}
@@ -418,7 +418,6 @@ function newsApply(a,s){if(S.newsOn===false)return;const w=newsImpact(s);a.nw=w;
 newsApply.sent={};
 async function loadNews(q){if(!q){NEWS='load';head();render()}try{const j=await(await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN')).json();if(!Array.isArray(j.Data))throw 0;NEWS=j.Data.slice(0,40);NT=Date.now();
  const n=NEWS.filter(x=>{const i=newsInfo(x);return i.as.length&&i.age<6}).length;log('News','analyse',NEWS.length+' actualités récupérées (CryptoCompare), '+n+' récentes concernent vos actifs')}catch(e){if(!Array.isArray(NEWS))NEWS='err';log('News','erreur','source d\'actualités injoignable')}if(['news','agents','dash'].includes(page))render()}
-function newsTick(){if(S.newsOn!==false&&(S.scalp=='run'||S.opp=='run')&&NEWS!='load'&&Date.now()-NT>S.cfg.newsMin*6e4){NT=Date.now();loadNews(1)}}
 function newsAgState(){if(S.newsOn===false)return'Suspendu (influence désactivée)';if(NEWS=='err')return'Erreur : source injoignable';if(NEWS=='load')return'Analyse en cours…';return Array.isArray(NEWS)?'Actualités analysées il y a '+Math.round((Date.now()-NT)/60000)+' min':'En attente : actualités non chargées'}
 function newsWhy(i){if(!i.as.length)return'Hors de vos 7 actifs : aucun effet sur les agents.';if(i.age>S.cfg.newsHrs)return'Trop ancienne (> '+S.cfg.newsHrs+' h) : ignorée par l\'Analyst.';if(!i.sg)return'Ton indéterminé : aucun effet sur le score.';
  return'Impact potentiel (hypothèse, pas une certitude) : environ '+(i.sg>0?'+':'−')+Math.round(nw1(i))+' pt(s) sur le score de '+i.as.join('/')+(i.sg<0&&i.ev&&!i.unc&&i.age<2?' et achat suspendu par prudence':'')}
@@ -638,7 +637,7 @@ async function loadNews(q,force){if(NS.busy)return;const now=Date.now();if(!q&&N
    const k='x'+NS.st+tr.map(x=>x.c).join();if(k!=NS.lk){NS.lk=k;log('News','erreur','actualités indisponibles — '+NS.msg+(Array.isArray(NEWS)?' · dernières actualités valides conservées (récupérées à '+hm(NS.ok)+')':' · aucune actualité inventée')+' · les agents continuent sans influence des actualités')}}
  }catch(e){NS.st='down';NS.msg='erreur interne : '+e.message;if(!Array.isArray(NEWS))NEWS='err'}finally{NS.busy=0}
  if(['news','agents','dash'].includes(page))render();head()}
-function newsTick(){if(S.newsOn!==false&&S.newsAuto!==false&&!NS.busy&&Date.now()-NT>S.cfg.newsMin*6e4)loadNews(1)}
+function newsTick(){if(S.newsOn!==false&&S.newsAuto!==false&&(S.scalp=='run'||S.opp=='run')&&!NS.busy&&Date.now()-NT>S.cfg.newsMin*6e4)loadNews(1)}
 const nsT=()=>({ok:['Connecté','up'],load:['Actualisation en cours','g'],none:['Aucune actualité récente','g'],down:['Source indisponible','dn'],key:[ls('atc_nkey')||ls('atc_nproxy')?'Clé API refusée':'Clé API manquante','dn'],rate:['Limite de requêtes atteinte','dn'],idle:['En attente','g']}[NS.st]||['En attente','g']);
 function newsAgState(){if(S.newsOn===false)return'Suspendu (influence désactivée)';const t=nsT()[0];return NS.st=='ok'?'Connecté · '+NS.prov+' · '+hm(NS.ok):t+(NS.st!='load'&&NS.st!='idle'&&Array.isArray(NEWS)&&NS.ok?' · données de '+hm(NS.ok)+' conservées':'')}
 function nsBox(){const L=Array.isArray(NEWS)?NEWS:[],I=L.map(newsInfo),rc=I.filter(i=>i.age<=S.cfg.newsHrs).length,mi=I.filter(i=>i.as.length&&i.age<=S.cfg.newsHrs).length,T=nsT(),bad=['down','key','rate'].includes(NS.st);
@@ -655,11 +654,11 @@ try{const o=JSON.parse(ls('atc_news')||'null');if(o&&Array.isArray(o.list)){cons
 if(NS.restored){NS.st='idle'}
 function newsApply(a,s){if(S.newsOn===false)return;const w=newsImpact(s);a.nw=w;if(!w.adj)return;const c0=a.conf,thr=a.tf?S.cfg.oppMinScore:S.cfg.minScore;let c1=Math.max(0,Math.min(95,c0+w.adj)),cap='';
  if(w.adj>0&&c0<thr&&c1>=thr){c1=thr-1;cap=' (plafonné : une actualité ne peut pas à elle seule faire passer un signal au-dessus du seuil de '+thr+')'}a.conf=c1;
- (newsApply.pend=newsApply.pend||{})[s]={t:Date.now(),w,c0,c1,ag:a.tf?'Opportunity':'Scalper'};const k=s+'|'+w.it.map(x=>x.n.published_on).join(',');
+ (newsApply.pend=newsApply.pend||{})[s+(a.tf?'o':'s')]={t:Date.now(),w,c0,c1,ag:a.tf?'Opportunity':'Scalper'};const k=s+'|'+w.it.map(x=>x.n.published_on).join(',');
  if(!newsApply.sent[k]){newsApply.sent[k]=1;log('News','message','→ AI Analyst : '+s+', '+w.it.length+' actualité(s) récente(s), score '+c0+' → '+c1+' ('+(w.adj>0?'+':'')+w.adj+' pt)'+cap+'. Hypothèse non vérifiée : « '+String(w.it[0].n.title).slice(0,80)+' » ('+esc(w.it[0].n.source||'source ?')+')')}}
 newsApply.sent={};
-{const s0=supervise;supervise=function(p,xr){const r=s0(p,xr);try{if(S.newsOn===false||p.st=='manuel'||p.st=='test')return r;const e=(newsApply.pend||{})[p.s],ok=e&&Date.now()-e.t<12e4,w=newsImpact(p.s),vt=S.cfg.newsVeto&&w.veto;
- if(ok||vt){const it=(ok?e.w.it:w.it)[0];log('News','message','Influence sur décision · '+p.s+' · agent influencé : '+(ok?e.ag:agOf(p)=='opp'?'Opportunity':'Scalper')+' · '+(ok?'score '+e.c0+' → '+e.c1+' ('+(e.w.adj>0?'+':'')+e.w.adj+' pt) · ':'')+(vt?'veto prudent (actualité négative importante, non vérifiée) · ':'')+'actualité « '+String(it?it.n.title:'').slice(0,70)+' » · décision finale : '+(r?'autorisé par le Supervisor (contrôles du Risk Manager passés)':'refusé'));if(ok)delete newsApply.pend[p.s]}}catch(x){}return r}}
+{const s0=supervise;supervise=function(p,xr){const r=s0(p,xr);try{if(S.newsOn===false||p.st=='manuel'||p.st=='test')return r;const e=(newsApply.pend||{})[p.s+(agOf(p)=='opp'?'o':'s')],ok=e&&Date.now()-e.t<12e4,w=newsImpact(p.s),vt=S.cfg.newsVeto&&w.veto;
+ if(ok||vt){const it=(ok?e.w.it:w.it)[0];log('News','message','Influence sur décision · '+p.s+' · agent influencé : '+(ok?e.ag:agOf(p)=='opp'?'Opportunity':'Scalper')+' · '+(ok?'score '+e.c0+' → '+e.c1+' ('+(e.w.adj>0?'+':'')+e.w.adj+' pt) · ':'')+(vt?'veto prudent (actualité négative importante, non vérifiée) · ':'')+'actualité « '+String(it?it.n.title:'').slice(0,70)+' » · décision finale : '+(r?'autorisé par le Supervisor (contrôles du Risk Manager passés)':'refusé'));if(ok)delete newsApply.pend[p.s+(agOf(p)=='opp'?'o':'s')]}}catch(x){}return r}}
 const alCard=()=>{const A=S.log.filter(l=>l.ty=='alerte'&&Date.now()-l.t<864e5).slice(0,3);return A.length?'<div class="card"><b class="sm">Alertes importantes (24 h)</b>'+A.map(l=>'<div class="row sm"><span class="g">'+dt(l.t)+'</span><span>'+esc(l.m)+'</span></div>').join('')+'</div>':''};
 /* ===== Phase 7 : tableaux de bord des deux bots, audit du Scalper, historique des propositions ===== */
 const PHMAX=300;let PHX={},PHF={ag:'sc',r:'',n:20};const SKT={};
@@ -667,7 +666,7 @@ function apx(b){const a=(S.ap=S.ap||{})[b]=S.ap[b]||{prop:0,acc:0,ref:0};['exe',
 function igc(b,k){const a=apx(b);(a.ig=a.ig||{})[k]=(a.ig[k]||0)+1}
 function stName(p){const ag=agOf(p);return ag=='opp'?((OSD[String(p.st).slice(2)]||{n:p.st}).n+(p.tf?' '+TN[p.tf]:'')):ag=='man'?'Manuel':(SD[p.st]?SD[p.st].n:String(p.st))}
 function phPush(e){const L=S.ph=Array.isArray(S.ph)?S.ph:[];e.id=S.pn=(S.pn||0)+1;e.t=Date.now();L.unshift(e);if(L.length>PHMAX)L.length=PHMAX}
-function phAdd(p,R){try{const ag=agOf(p),a=apx(ag),isS=r=>/^AI News|^conflit d'actif/.test(r),o=S.ord[0];
+function phAdd(p,R){try{const ag=agOf(p),a=apx(ag),isS=r=>/^AI News|^conflit d'actif|^AI Supervisor|^AI Portfolio|^AI Buyer/.test(r),o=S.ord[0];
  R&&R.forEach(r=>{const k=r.replace(/[\d.,]+/g,'#');(a.rj=a.rj||{})[k]=(a.rj[k]||0)+1});
  phPush({s:p.s,ag,st:stName(p),conf:PHX.conf,e:p.entry,q:p.q,c:p.cost,rk:p.risk,sl:p.sl,tp:p.tp,rr:p.rr,sv:R?R.filter(isS):[],rm:R?R.filter(r=>!isS(r)):[],ok:!R,oid:!R&&o&&o.s==p.s?o.id:0})}catch(e){}}
 function needAtr(st){const c=S.cfg,P=S.sp[st];if(!P)return NaN;const rr=A=>{const en=st=='rev'?1-.3*A:1+c.slip/100,k=en*(2*c.fee/100+c.slip/100),rpu=en-(1-P.slM*A)+k;return rpu>0?((1+P.tpM*A)-en-k)/rpu:0};let lo=0,hi=.5;if(rr(hi)<c.minRR)return Infinity;for(let n=0;n<40;n++){const m=(lo+hi)/2;rr(m)>=c.minRR?hi=m:lo=m}return hi*100}
@@ -728,40 +727,79 @@ function tmMsg(from,to,ty,p,o){o=o||{};const s=p.s,i=ind(s),a=i?i.a/i.p*100:null
 function corr(a,b){const x=H[a],y=H[b],n=30;if(!x||!y||x.length<n+1||y.length<n+1)return null;const r=c=>{const o=[];for(let i=c.length-n;i<c.length;i++)o.push(c[i]/c[i-1]-1);return o},u=r(x),v=r(y),mu=sma(u,n),mv=sma(v,n);let xy=0,xx=0,yy=0;for(let i=0;i<n;i++){xy+=(u[i]-mu)*(v[i]-mv);xx+=(u[i]-mu)**2;yy+=(v[i]-mv)**2}return xx&&yy?xy/Math.sqrt(xx*yy):null}
 function pmCheck(p){const E=eq(),cl=(S.pos||[]).filter(x=>x.s!=p.s&&(corr(p.s,x.s)||0)>=.8),ex=cl.reduce((a,x)=>a+x.q*x.e,0)+(p.cost||0),pct=E>0?ex/E*100:0,lim=S.cfg.expMax/2;
  return{cl:cl.map(x=>x.s),pct,veto:cl.length&&pct>lim?'concentration corrélée '+cl.map(x=>x.s).join('/')+' + '+p.s+' : '+f2(pct,0)+' % du capital > '+f2(lim,0)+' %':''}}
-/* Score collectif v2 : 6 familles d'information distinctes (chacune comptée une seule fois), pondérations justifiées ci-dessous, porte de fiabilité des données.
-   signal .35 : score de la stratégie (il contient déjà MACD, volume et tendance : pas recompté) · multiTF .15 : bougies 1 h/4 h, source indépendante · régime .10 : adéquation stratégie/régime
-   edge .20 : R/R NET (frais et slippage déjà inclus : pas de critère « coûts » séparé) · histo .10 : réussite de la stratégie, rétrécie vers 50 % tant que n est petit · portefeuille .10 : corrélation + exposition.
-   Fiabilité/fraîcheur = porte (0 si donnée périmée). Ces pondérations sont des hypothèses de travail : NON calibrées, calibration hors échantillon prévue avec le backtest (étapes 2-3). */
-const TW={signal:.35,multiTF:.15,regime:.10,edge:.20,histo:.10,portefeuille:.10},TWL={signal:'signal de la stratégie (technique, momentum, volume)',multiTF:'confirmation 1 h / 4 h',regime:'régime de marché',edge:'avantage net après frais et slippage',histo:'historique de la stratégie',portefeuille:'portefeuille (corrélation, exposition)'};
-const tmKey=y=>y.sc!=null?y.sc+Math.min(.99,Math.max(0,y.p.rr)/100):-1;
-function tmScore(p,conf){const s=p.s,i=ind(s),st=String(p.st||'').replace(/^o_/,''),rev=st=='rev'||st=='rvs',rg=regime(s),up=[tfi(s,'1h'),tfi(s,'4h')].filter(Boolean),pm=pmCheck(p),E=eq(),
- h=S.hist.filter(x=>agOf(x)==agOf(p)&&x.st==p.st&&!/partielle/.test(x.why)),n=h.length,wr=n?h.filter(x=>x.pnl>0).length/n*100:50,ex=E>0?engaged()/E*100/S.cfg.expMax:0,
- c={signal:Math.max(0,Math.min(100,conf==null?50:conf)),multiTF:up.length?up.reduce((t,x)=>t+(x.p>x.s50&&x.mh>0?85:x.p>x.s50?60:rev?45:20),0)/up.length:50,
-  regime:(rev?{'latéral':70,baissier:55,volatil:50,haussier:45,inconnu:40}:{haussier:80,volatil:65,'latéral':40,baissier:20,inconnu:40})[rg],
-  edge:Math.min(100,Math.max(0,(p.rr||0)/Math.max(S.cfg.minRR,.1)*50)),histo:50+(wr-50)*n/(n+20),
-  portefeuille:Math.max(0,(pm.cl.length?100-pm.pct/Math.max(1,S.cfg.expMax/2)*60:100)-30*Math.min(1,ex))},
- q=i&&fresh(s)?1:0;return{c,q,n,tf:up.length,cal:false,v:Math.round(q*Object.keys(TW).reduce((t,k)=>t+TW[k]*c[k],0))}}
+/* Score collectif v3 (phase 8.2) : 11 familles d'information distinctes, chacune comptée UNE fois.
+   Structure de marché .45 : technique .15 (tendance, RSI, Bollinger) · momentum .09 (MACD, MA5/MA20) · volume .07 · multiTF .14 (horizons SUPÉRIEURS à celui de la proposition : pas de recomptage de son propre horizon).
+   Économie .18 : edge .12 (R/R net, frais inclus) · cout .06 (objectif de gain ÷ frais+slippage). Preuves .25 : regime .08 · qualite .09 (backtest chronologique, sinon neutre) · histo .08 (historique réel de CE bot seulement).
+   Contexte .12 : portefeuille .08 (corrélation + exposition) · actualites .04. Le score de confiance du signal (conf) n'entre PAS (il contient déjà MACD/volume/tendance/actualités) : il ne sert qu'au seuil d'entrée.
+   Fiabilité/fraîcheur = facteur multiplicatif (0 si donnée périmée), pas un critère pondéré. Pondérations = a priori de travail, NON ajustées ; testables via « Tester le score » (onglet Équipe). */
+const TW={technique:.15,momentum:.09,volume:.07,multiTF:.14,regime:.08,qualite:.09,edge:.12,cout:.06,histo:.08,portefeuille:.08,actualites:.04},
+TWL={technique:'structure technique',momentum:'momentum',volume:'volume relatif',multiTF:'horizons supérieurs',regime:'régime de marché',qualite:'qualité backtestée de la stratégie',edge:'rendement net / risque',cout:'objectif vs frais et slippage',histo:'historique réel du bot',portefeuille:'corrélation et exposition',actualites:'actualités'},TFLOOR=35;
+const tmKey=y=>y.sc!=null?y.sc+Math.min(.99,Math.max(0,y.p.rr)/100):-1,tmHT=tf=>tf=='4h'?[]:tf=='1h'?['4h']:['1h','4h'],cp=x=>Math.max(0,Math.min(100,x)),
+tmCalV=o=>cp(50+(o.wA/o.nA*100-50)*o.nA/(o.nA+20)+(o.xA>0?10:-10));
+function tmCalC(st,rg){const c=S.cal;if(!c||!c.ok||!c.byst)return{};const a=c.byst[st],b=(c.cells||{})[st+'|'+rg];return{s:a&&a.ok?a:null,r:b&&b.ok?b:null}}
+/* Mémoire de performance : UN point d'accès, historiques des deux bots toujours séparés (filtre agOf) */
+function tmMemory(ag,st,rg){const h=S.hist.filter(x=>agOf(x)==ag&&x.st==st&&!/partielle/.test(x.why)),r=h.filter(x=>x.reg==rg),L=r.slice(0,5),n=h.length,w=h.filter(x=>x.pnl>0).length,tg={};
+ (S.tx||[]).filter(x=>x.ag==ag&&x.st0==st&&x.tg).slice(0,10).forEach(x=>x.tg.forEach(k=>tg[k]=(tg[k]||0)+1));
+ return{n,wr:n?w/n*100:50,exp:n?h.reduce((t,x)=>t+x.pnl,0)/n:0,nr:r.length,l5:L.filter(x=>x.pnl<0).length,n5:L.length,tg}}
+function tmScore(p,conf){const s=p.s,c0=S.cfg,ag=agOf(p),st=String(p.st||'').replace(/^o_/,''),rev=st=='rev'||st=='rvs',tf=p.tf||'1m',iv=ag=='opp'&&p.tf?tfi(s,p.tf):ind(s),Z={};Object.keys(TW).forEach(k=>Z[k]=0);
+ if(!iv)return{c:Z,q:0,n:0,tf:0,cal:false,v:0};
+ const rg=regime(s),HL=tmHT(tf),up=HL.map(t=>tfi(s,t)).filter(Boolean),pm=pmCheck(p),E=eq(),mem=tmMemory(ag,p.st,rg),w=S.newsOn===false?null:newsImpact(s),cc=tmCalC(st,rg),rt=2*c0.fee+c0.slip,mn=ag=='opp'?c0.oppMinRR:c0.minRR,
+ ex=E>0?engaged()/E*100/c0.expMax:0,age=M[s]?(Date.now()-M[s].t)/1000:1e9,cov=HL.length?up.length/HL.length:1,tgt=p.entry>0?(p.tp-p.entry)/p.entry*100/rt:0,
+ pr=(rev?{'latéral':70,baissier:55,volatil:50,haussier:45,inconnu:40}:{haussier:80,volatil:65,'latéral':40,baissier:20,inconnu:40})[rg],
+ c={technique:rev?(iv.r<30?80:iv.r<40?65:iv.r<50?45:30)+(iv.p<iv.bl?10:0):(iv.p>iv.m&&iv.m>iv.s50?80:iv.p>iv.s50?60:25)-(iv.r>70||iv.p>iv.bu?20:0),
+  momentum:rev?(iv.p>iv.pc?65:35):(iv.mh>0?65:30)+(iv.f==null?0:iv.f>iv.m?15:-10),volume:iv.vr>=1.5?85:iv.vr>=1.2?70:iv.vr>=.8?50:30,
+  multiTF:up.length?up.reduce((t,x)=>t+(x.p>x.s50&&x.mh>0?85:x.p>x.s50?60:rev?45:20),0)/up.length:50,
+  regime:cc.r&&cc.s?50+(tmCalV(cc.r)-tmCalV(cc.s))*1.5:pr,qualite:cc.s?tmCalV(cc.s):50,edge:(p.rr||0)/Math.max(mn,.1)*50,cout:tgt/6*100,histo:50+(mem.wr-50)*mem.n/(mem.n+20),
+  portefeuille:(pm.cl.length?100-pm.pct/Math.max(1,c0.expMax/2)*60:100)-30*Math.min(1,ex),actualites:w?50+50*w.adj/Math.max(1,c0.newsMax):50},
+ q=fresh(s)?Math.max(0,1-.3*age/c0.stale)*(.8+.2*cov):0;Object.keys(c).forEach(k=>c[k]=cp(c[k]));
+ return{c,q,n:mem.n,tf:up.length,cal:!!cc.s,v:Math.round(q*Object.keys(TW).reduce((t,k)=>t+TW[k]*c[k],0))}}
+/* Détections partagées entre les deux bots (lecture seule : aucun historique n'est mélangé) */
+function tmFlags(p,ag){const s=p.s,i=ind(s),E=eq(),c=S.cfg,F=[],f=(k,sv,t)=>F.push({k,s:sv,t}),tf=p.tf||'1m',HL=tmHT(tf),rg=regime(s),pm=pmCheck(p),rt=2*c.fee+c.slip,
+ bad=HL.filter(t=>{const x=tfi(s,t);return x&&x.p<x.s50}),net=p.rr!=null&&p.risk!=null?p.rr*p.risk:0,fees=p.cost*rt/100,mem=tmMemory(ag,p.st,rg),w=S.newsOn===false?null:newsImpact(s);
+ if(bad.length)f('tendance',bad.length==HL.length&&HL.length>1?2:1,(ag=='sc'?'Scalper haussier (1 min)':'Opportunity '+TN[tf])+' mais tendance supérieure baissière ('+bad.map(t=>TN[t]).join(' et ')+' : prix < MA50) : évalué selon l\'historique, pas refusé d\'office');
+ if(HL.length&&!HL.some(t=>tfi(s,t)))f('données',0,'horizons supérieurs indisponibles : confirmation non vérifiable (score pénalisé par la fiabilité)');
+ if(fees>0&&net<2*fees)f('frais',net<1.2*fees?2:1,'mouvement visé trop faible : gain net potentiel '+f2(net)+' € pour '+f2(fees)+' € de frais et slippage (×'+f2(net/fees)+')');
+ if(pm.cl.length)f('corrélation',pm.pct>c.expMax/2*.7?2:1,'positions corrélées ouvertes : '+pm.cl.join('/')+', exposition cumulée '+f2(pm.pct,0)+' %');
+ if(ag=='opp'&&i&&i.mh<=0&&i.p<i.m)f('contradiction',1,'Opportunity achète mais le court terme (1 min, vue Scalper) est baissier : MACD ≤ signal et prix < MA20');
+ {const x=ag=='sc'?tfi(s,'15m'):null;if(x&&x.mh<=0)f('contradiction',1,'Scalper haussier mais MACD 15 min ≤ signal (vue Opportunity)')}
+ {const o=PQ.find(z=>z.p!==p&&z.p.s==s);if(o)f('conflit',0,'Scalper et Opportunity proposent '+s+' en même temps : un seul agent sera servi (une position par actif)')}
+ if(E>0&&(engaged()+p.cost)/E*100>c.expMax*.8)f('exposition',1,'exposition totale après achat '+f2((engaged()+p.cost)/E*100,0)+' % > 80 % de la limite ('+c.expMax+' %)');
+ if(mem.nr>=3&&mem.l5>=3)f('défaillance',2,'stratégie en pertes répétées en régime '+rg+' ('+mem.l5+' pertes sur les '+mem.n5+' dernières clôtures de ce bot)');
+ if(mem.tg.late>=2&&i&&(i.r>70||i.p>i.bu))f('tardif',1,'entrée tardive à l\'origine de '+mem.tg.late+' pertes récentes : RSI/Bollinger en excès actuellement');
+ {const o=ag=='sc'?'opp':'sc',h=S.hist.filter(q=>agOf(q)==o&&q.s==s&&!/partielle/.test(q.why)).slice(0,5);if(h.length>=3&&h.filter(q=>q.pnl<0).length>=3)f('autre bot',1,'l\'autre bot perd sur '+s+' ('+h.filter(q=>q.pnl<0).length+' pertes sur '+h.length+') : information partagée, historiques non mélangés')}
+ if(i&&i.ar<.8)f('volatilité',0,'volatilité en contraction (ATR ×'+f2(i.ar)+')');
+ if(w&&w.it.length&&w.adj<0)f('actualité',w.veto?2:1,'actualité négative récente sur '+s+(w.veto?' (veto possible du Supervisor)':''));
+ return F}
+function tmScale(p,k){p.q*=k;p.cost*=k;p.fee*=k;p.risk*=k}
+/* Décision du Supervisor : un désaccord ne refuse jamais seul. Contradictions cumulées ≥ 2 → taille ×0,75 ; ≥ 4 → ×0,5 (jamais d'augmentation). Refus par le score : uniquement si calibré. Le Risk Manager contrôle ensuite. */
+function tmDecide(p){const m=p.tm||{},fx=m.fx||[],sv=fx.reduce((t,f)=>t+f.s,0),R={x:'',k:1};
+ if(sv>=2){const k=sv>=4?.5:.75;if(p.cost*k>=10){tmScale(p,k);R.k=k}}
+ if(m.cal&&m.sc!=null&&m.sc<TFLOOR&&sv>=2)R.x='AI Supervisor : score collectif calibré '+m.sc+' < '+TFLOOR+' avec '+fx.filter(f=>f.s>0).length+' contradiction(s) : '+fx.filter(f=>f.s>0).map(f=>f.k).join(', ');
+ m.dec={k:R.k,sv};return R}
+function tmDc(p,ok,x,R0){if(p.st=='test'||p.st=='manuel')return;try{const m=p.tm||{},ag=agOf(p),fx=(m.fx||[]).filter(f=>f.s>0||f.k=='conflit'),d=m.dec||{k:1,sv:0},red=d.k<1,
+ v=ok?(red?'accepté, taille réduite à '+Math.round(d.k*100)+' %':'accepté'):'refusé',
+ why=ok?(fx.length?'contradictions prises en compte, aucune ne justifie un refus ('+fx.map(f=>f.k).join(', ')+')'+(red?' → taille réduite (cumul '+d.sv+')':'')+' ; Risk Manager : limites respectées':'aucune contradiction ; Risk Manager : limites respectées'):([x].concat(R0)).filter(Boolean).join(' ; ')||'refusé';
+ (S.dc=Array.isArray(S.dc)?S.dc:[]).unshift({t:Date.now(),s:p.s,ag,sc:m.sc==null?null:m.sc,cal:!!m.cal,v,why,fx:fx.map(f=>f.t)});if(S.dc.length>60)S.dc.length=60;
+ log('Supervisor','décision',p.s+' · '+AGN[ag]+' · '+v+' · score '+(m.sc==null?'n/d':m.sc)+(m.cal?'':' (indicatif)')+' · '+why.slice(0,170))}catch(e){}}
 function tmCtx(p,fl){const i=ind(p.s);return{reg:regime(p.s),fl:fl||[],ind:i?'RSI '+f2(i.r,0)+', MACD '+(i.mh>0?'>':'≤')+' signal, volume ×'+f2(i.vr)+', ATR '+f2(i.a/i.p*100,2)+' %':'indisponibles',late:i?(i.r>70?'RSI '+f2(i.r,0)+' > 70':i.p>i.bu?'prix au-dessus de la bande de Bollinger haute':''):''}}
-function tmCoord(y){const p=y.p,s=p.s,ag=y.ag,nm=TNM[ag]||'Scalper',fl=[],t=TB(),rg=regime(s),i=ind(s);p.pid=p.pid||'P'+Date.now().toString(36)+(++t.pc);
- const dis=m=>{t.dis++;fl.push(m);log('Supervisor','désaccord',s+' : '+m)},g=tmScore(p,y.conf),i4=tfi(s,'4h');
- tmMsg('Analyst',nm,'analyse',p,{conf:y.conf,rec:'conclusions transmises',why:'régime '+rg+(i4?'' :' ; unités 1 h / 4 h non disponibles')});
- if(ag=='sc'&&i4&&i4.p<i4.s50)dis('Scalper haussier (1 min) mais tendance 4 h baissière (prix < MA50, bougies Opportunity) : évalué selon l\'historique, pas refusé d\'office');
- {const o=PQ.find(z=>z!==y&&z.p.s==s);if(o&&PQ.indexOf(y)<PQ.indexOf(o))dis('Scalper et Opportunity proposent '+s+' en même temps : risque de concentration, un seul agent sera servi')};
- if(i&&i.ar<.8){fl.push('volatilité en contraction (ATR ×'+f2(i.ar)+')');tmMsg('Analyst',nm,'alerte',p,{rec:ag=='sc'?'adapter la sélection (marché peu volatil)':'tenir compte',why:'ATR(5)/ATR(30) = '+f2(i.ar)})}
- const w=S.newsOn===false?null:newsImpact(s);if(w&&w.it&&w.it.length){fl.push('actualité récente sur '+s+(w.veto?' (négative, veto possible)':''));tmMsg('News',nm,'alerte',p,{rec:'réévaluer la proposition',why:w.it.length+' actualité(s) récente(s)'+(w.veto?', risque élevé':'')})}
- const hh=S.hist.filter(q=>agOf(q)==ag&&q.st==p.st&&q.reg==rg&&!/partielle/.test(q.why)).slice(0,5);
- if(hh.length>=3&&hh.filter(q=>q.pnl<0).length>=3){fl.push('stratégie en pertes répétées en régime '+rg);tmMsg(nm,'Supervisor','alerte',p,{rec:'tenir compte (pas de refus automatique)',why:hh.filter(q=>q.pnl<0).length+' pertes sur '+hh.length+' dernières clôtures de ce régime'})}
- y.sc=g.v;p.tm=Object.assign(tmCtx(p,fl),{sc:g.v});tmMsg(nm,'Supervisor','proposition',p,{conf:y.conf,sc:g.v,rec:'soumise à l\'arbitrage',why:'score collectif '+g.v+'/100, indicatif non calibré ('+Object.keys(TW).map(k=>k+' '+Math.round(g.c[k])).join(', ')+(g.q?'':' ; données non fiables : score nul')+')'})}
+function tmCoord(y){const p=y.p,s=p.s,ag=y.ag,nm=TNM[ag]||'Scalper',t=TB(),rg=regime(s);p.pid=p.pid||'P'+Date.now().toString(36)+(++t.pc);
+ const fx=tmFlags(p,ag),fl=fx.map(f=>f.t),g=tmScore(p,y.conf),i4=tfi(s,'4h');
+ fx.forEach(f=>{if(f.s>0||f.k=='conflit'){t.dis++;log('Supervisor','désaccord',s+' : '+f.t)}});
+ tmMsg('Analyst',nm,'analyse',p,{conf:y.conf,rec:'conclusions transmises',why:'régime '+rg+(i4?'':' ; horizons supérieurs non disponibles')});
+ fx.filter(f=>['volatilité','actualité','défaillance','frais','tendance','corrélation','contradiction'].includes(f.k)).forEach(f=>tmMsg(f.k=='actualité'?'News':f.k=='défaillance'?nm:f.k=='corrélation'?'Portfolio':'Analyst',f.k=='défaillance'?'Supervisor':nm,'alerte',p,{rec:f.s>=2?'réduire ou réévaluer (décision du Supervisor)':'tenir compte',why:f.t}));
+ y.sc=g.v;p.tm=Object.assign(tmCtx(p,fl),{sc:g.v,cal:g.cal,fx:fx.map(f=>({k:f.k,s:f.s,t:f.t}))});
+ tmMsg(nm,'Supervisor','proposition',p,{conf:y.conf,sc:g.v,rec:'soumise à l\'arbitrage',why:'score collectif '+g.v+'/100, '+(g.cal?'partiellement calibré':'indicatif non calibré')+' ('+Object.keys(TW).map(k=>k+' '+Math.round(g.c[k])).join(', ')+' ; fiabilité ×'+f2(g.q)+(g.q?'':' : données non fiables, score nul')+')'})}
 {const a0=arbitrate;arbitrate=function(){try{PQ.forEach(tmCoord)}catch(e){log('Admin','erreur','Team : '+e.message)}return a0()}}
 {const s1=supervise;supervise=function(p,xr){const t=TB(),pm=pmCheck(p);let x=xr||'';if(!p.pid)p.pid='P'+Date.now().toString(36)+(++t.pc);
  if(t.done[p.pid]){log('Supervisor','refus',p.s+' refusé : proposition '+p.pid+' déjà traitée (exécution unique)');return false}
  t.done[p.pid]=Date.now();const K=Object.keys(t.done);if(K.length>600)K.slice(0,300).forEach(q=>delete t.done[q]);
  if(!x&&p.st!='test'&&pm.veto)x='AI Portfolio Manager : '+pm.veto;
+ if(!x&&p.st!='test'&&p.st!='manuel'){const d=tmDecide(p);if(d.x)x=d.x}
  if(!x&&p.type=='market'&&fresh(p.s)&&Math.abs(M[p.s].p*(1+S.cfg.slip/100)/p.entry-1)>.005)x='AI Buyer : prix de marché écarté de plus de 0,5 % de la proposition';
  let R0=[];try{R0=risk(p)}catch(e){}const ok=s1(p,x);
  try{if(!p.tm)p.tm=tmCtx(p);if(ok){if(S.ord[0])S.ord[0].pid=p.pid;(S.tr=S.tr||{})[p.s]=Object.assign({pid:p.pid,ag:agOf(p),t:Date.now()},p.tm)}
   if(pm.cl.length)tmMsg('Portfolio','Supervisor','allocation',p,{rec:pm.veto?'refuser':'accepter sous réserve',why:'positions corrélées : '+pm.cl.join('/')+', exposition cumulée '+f2(pm.pct,0)+' %'});
-  tmMsg('Risk','Supervisor',R0.length?'refus':'validation',p,{rec:R0.length?'refuser':'valider',why:R0.length?R0.join(', '):'limites respectées'});
+  tmDc(p,ok,x,R0);tmMsg('Risk','Supervisor',R0.length?'refus':'validation',p,{rec:R0.length?'refuser':'valider',why:R0.length?R0.join(', '):'limites respectées'});
   tmMsg('Supervisor',ok?'Buyer':TNM[agOf(p)]||'Scalper','décision',p,{rec:ok?'exécuter (ordre '+p.pid+')':'refuser',why:ok?'autorisée par le Supervisor et le Risk Manager':(x?x+(R0.length?', ':''):'')+R0.join(', ')})}
  catch(e){log('Admin','erreur','Team : '+e.message)}return ok}}
 function tmPost(h,c,x){const t=TB(),ag=agOf(h),rg=regime(h.s),en=c||{},g=h.pnl+h.fees,R=[],ls=S.hist.filter(q=>agOf(q)==ag&&q.st==h.st&&!/partielle/.test(q.why)).slice(0,10).filter(q=>q.pnl<0).length;
@@ -771,7 +809,7 @@ function tmPost(h,c,x){const t=TB(),ag=agOf(h),rg=regime(h.s),en=c||{},g=h.pnl+h
  R.push('Frais : '+f2(h.fees)+' € '+(g>0?'(ont absorbé un gain brut de '+f2(g)+' €)':'(perte brute '+f2(g)+' €, frais non seuls en cause)'));
  R.push('Régime : '+(en.reg||'?')+' → '+rg+(en.reg&&en.reg!=rg?' (changé)':''));R.push('Faiblesse récurrente : '+(ls>=3?'possible, '+ls+' pertes sur les 10 dernières clôtures de cette stratégie (indicatif)':'non démontrée ('+ls+' perte(s) sur les 10 dernières)'));
  const rec='Recommandation à valider par vous (aucun paramètre modifié automatiquement, une seule perte ne suffit pas) : '+(ls>=3?'examiner les réglages de '+stName(h)+' avec l\'onglet Perfs.':'conserver les réglages et continuer à observer.');
- (S.tx=Array.isArray(S.tx)?S.tx:[]).unshift({t:Date.now(),s:h.s,ag,st:stName(h),pnl:h.pnl,pid:en.pid||'',R,rec});if(S.tx.length>60)S.tx.length=60;
+ (S.tx=Array.isArray(S.tx)?S.tx:[]).unshift({t:Date.now(),s:h.s,ag,st:stName(h),pnl:h.pnl,pid:en.pid||'',R,rec,st0:h.st,reg:en.reg||rg,tg:[en.late?'late':'',g>0?'frais':'',en.reg&&en.reg!=rg?'régime':'',/stop/.test(h.why)?'stop':''].filter(Boolean)});if(S.tx.length>60)S.tx.length=60;
  log('Supervisor','rétrospective',h.s+' perte '+f2(h.pnl)+' € : analyse rétrospective enregistrée (onglet Équipe)')}
 {const c0=close;close=function(x,why,px){const r=c0(x,why,px);try{const h=S.hist[0],c=(S.tr||{})[x.s];if(h&&h.s==x.s&&Date.now()-h.t<2000){if(c){h.pid=c.pid;h.reg=c.reg}
  ['Supervisor','Portfolio'].forEach(to=>tmMsg('Seller',to,'sortie',{s:x.s,sl:x.sl,cost:x.q*x.e,tf:x.tf,pid:c&&c.pid},{dir:'sortie',reg:c&&c.reg,rec:'clôture : '+why,why:'P&L net '+f2(h.pnl)+' €'}));
@@ -796,6 +834,43 @@ PAGES.team=()=>{const t=TB(),ap=S.ap||{},sm=f=>['sc','opp','man'].reduce((a,k)=>
  +'<h2>Mémoire de performance (bots séparés)</h2>'+pf('sc')+pf('opp')+'<div class="sm g">Statistiques descriptives sur l\'historique conservé (500 ventes max). Ce n\'est pas de l\'apprentissage automatique et rien ne modifie les paramètres sans votre accord. Le régime n\'est enregistré que pour les transactions ouvertes après cette mise à jour.</div>'
  +'<h2>Analyses rétrospectives des pertes</h2>'+((S.tx||[]).slice(0,10).map(x=>`<details class="card"><summary><b>${esc(x.s)}</b> · ${esc(x.st)} · <span class="dn">${f2(x.pnl)} €</span> <span class="g sm">${dt(x.t)}</span></summary>${x.R.map(r=>'<div class="sm" style="padding:3px 0">'+esc(r)+'</div>').join('')}<div class="sm up" style="margin-top:6px">${esc(x.rec)}</div></details>`).join('')||'<div class="card g sm">Aucune perte clôturée depuis cette mise à jour.</div>')};
 PG.splice(2,0,['team','Équipe']);
+/* ===== Phase 8.2 : calibration chronologique, test du score, décisions justifiées ===== */
+function tmCalib(R){const T=[];R.rows.forEach(r=>r.tr.forEach(t=>T.push({st:r.st,rg:t.reg,p:t.pnl,t:t.t0})));
+ if(T.length<20){S.cal={t:Date.now(),n:T.length,days:R.days,ok:false};return}
+ T.sort((a,b)=>a.t-b.t);const cut=Math.floor(T.length*.7),cells={},byst={},add=(m,k,x,ph)=>{const o=m[k]=m[k]||{nA:0,wA:0,xA:0,nB:0,wB:0,xB:0};o['n'+ph]++;if(x.p>0)o['w'+ph]++;o['x'+ph]+=x.p};
+ T.forEach((x,j)=>{const ph=j<cut?'A':'B';add(cells,x.st+'|'+x.rg,x,ph);add(byst,x.st,x,ph)});
+ [cells,byst].forEach(m=>Object.values(m).forEach(o=>o.ok=o.nA>=30&&o.nB>=10&&(o.xA>0)==(o.xB>0)));
+ S.cal={t:Date.now(),days:R.days,fee:R.fee,slip:R.slip,n:T.length,cut:T[cut].t,cells,byst,ok:Object.values(byst).some(o=>o.ok)};
+ log('Supervisor','calibration','Score collectif : '+T.length+' transactions de backtest, apprentissage sur les 70 % les plus anciens, validation sur les 30 % récents : '+(S.cal.ok?'qualité/régime validés pour '+Object.values(byst).filter(o=>o.ok).length+' stratégie(s)':'échantillon insuffisant, score indicatif non calibré'))}
+function selfTestT(){const sv=S,mv=M,dv=D,R=[],chk=(n,c,d)=>R.push({n,ok:!!c,d:d||''}),now=Date.now();
+ try{S=JSON.parse(JSON.stringify(sv));D=JSON.parse(JSON.stringify(dv));Object.assign(S,{log:[],pos:[],ord:[],hist:[],al:[],tx:[],tm:null,dc:[],ph:[],cal:null,emerg:false,halt:null,cash:10000,init:10000,peak:10000,dayStart:10000,newsOn:false,day:new Date().toDateString()});
+  Object.assign(S.cfg,{fee:.1,slip:.05,risk:.25,minRR:1.2,stale:60,expMax:70,maxAsset:25,maxPos:5});
+  const k=Array.from({length:120},(_,j)=>{const c=100+.1*j;return{h:c*1.003,l:c*.997,c,v:j==119?220:100,ct:now-(120-j)*6e4}});k.t=now;K.TEST=k;H.TEST=k.map(x=>x.c);const L=k[119].c;M={TEST:{p:L,chg:0,vol:1e6,t:now},T2:{p:60,chg:0,vol:1e6,t:now}};
+  const a=mkp('TEST','market',0,L*.99,L*1.02,5,'trend'),b=mkp('TEST','market',0,L*.99,L*1.05,5,'trend'),ga=tmScore(a,50);
+  chk('Somme des pondérations = 1',Math.abs(Object.values(TW).reduce((t,x)=>t+x,0)-1)<1e-9,Object.keys(TW).length+' familles');
+  chk('Familles et score total dans [0 ; 100]',Object.values(ga.c).every(x=>x>=0&&x<=100)&&ga.v>=0&&ga.v<=100,'score '+ga.v);
+  chk('Pas de double comptage : la confiance du signal ne change pas le score',tmScore(a,10).v==tmScore(a,95).v,'');
+  chk('Meilleur objectif net → score plus élevé',tmScore(b,50).v>ga.v,tmScore(b,50).v+' > '+ga.v);
+  S.pos=[{id:1,s:'T2',q:100,e:60,sl:50,tp:70,hi:60,fee:0,t:now,st:'mom'}];chk('Exposition élevée → famille portefeuille plus basse',tmScore(a,50).c.portefeuille<ga.c.portefeuille,'');S.pos=[];
+  chk('Le classement utilise le score collectif en premier',tmKey({sc:70,p:{rr:1}})>tmKey({sc:60,p:{rr:9}}),'');
+  a.tm={sc:5,cal:false,fx:[{k:'tendance',s:2,t:'x'},{k:'frais',s:2,t:'y'}]};const d=tmDecide(a);
+  chk('Score non calibré : aucun refus venant du score',d.x==='','');
+  chk('Désaccord ≠ refus : taille réduite, ordre non bloqué',d.k<1&&a.cost>=10,'taille × '+d.k);
+  const c=mkp('TEST','market',0,L*.9,L*1.1,200,'trend');c.tm={sc:100,cal:true,fx:[]};
+  chk('Risk Manager prioritaire : score 100 mais risque excessif → refusé',!supervise(c)&&!S.pos.length,S.log[0]?S.log[0].m.slice(0,90):'');
+  M.TEST.t=now-1e6;chk('Donnée périmée → score nul',tmScore(a,50).v==0,'');M.TEST.t=now}
+ catch(e){chk('Exécution du test',false,e.message)}finally{S=sv;M=mv;D=dv;delete K.TEST;delete H.TEST}
+ (S.testsT=S.testsT||[]).unshift({t:Date.now(),ok:R.every(r=>r.ok),R});S.testsT.length=Math.min(S.testsT.length,3)}
+ACT.tcal=()=>{if(!BTX.res)return toast('Lancez d\'abord un backtest dans l\'onglet Labo (7 jours, tous les actifs) : la calibration réutilise ses transactions.');tmCalib(BTX.res);done()};
+ACT.ttest=()=>{selfTestT();done()};
+{const s0=ACT.sc;ACT.sc=function(v){if(v=='run')HT.t=0;return s0.call(this,v)}}
+{const t0=PAGES.team;PAGES.team=()=>{const cs=S.cal,ok=cs&&cs.ok,T=(S.testsT||[])[0],
+ sc='<div class="card"><b>Score collectif : '+(ok?'partiellement calibré':'indicatif, non calibré')+'</b><div class="sm g">Il classe les propositions du Supervisor et réduit la taille en cas de contradictions ; il ne remplace jamais le Risk Manager. '+Object.keys(TW).length+' familles distinctes, chacune comptée une fois : '+Object.keys(TW).map(k=>TWL[k]+' '+Math.round(TW[k]*100)+' %').join(' · ')+'. Fiabilité et fraîcheur : facteur multiplicatif (donnée périmée = score nul). '+(ok?'Qualité et régime calibrés sur '+cs.n+' transactions (apprentissage avant le '+dt(cs.cut)+', test hors échantillon après) ; pondérations non ajustées ; Opportunity non backtesté : indicatif.':'Pondérations = hypothèses de travail ; qualité et régime non calibrés : aucun refus ne peut venir du score seul.')+'</div></div>',
+ rows=cs&&cs.byst?Object.keys(cs.byst).map(k=>{const o=cs.byst[k],e=(x,n)=>n?f2(x/n):'—';return[(SD[k]||{n:k}).n,o.nA,e(o.xA,o.nA),o.nB,e(o.xB,o.nB),o.ok?'<span class="up">validée</span>':'<span class="g">insuffisante</span>']}):[],
+ ca='<div class="card"><b>Calibration chronologique (Scalper)</b><div class="sm g">Transactions du backtest triées par date : 70 % anciennes pour apprendre, 30 % récentes pour valider. Validée = au moins 30 / 10 transactions et même signe de l\'espérance des deux côtés.</div>'+(cs?row('Dernière calibration',dt(cs.t)+' · '+cs.n+' transactions'):'')+(rows.length?tbl(['Stratégie','Appr.','Esp. €','Test','Esp. €','Statut'],rows):'<div class="sm g">Aucune calibration : lancez un backtest dans Labo (elle s\'exécute automatiquement à sa fin).</div>')+'<div class="btns"><button data-a="tcal">Calibrer depuis le dernier backtest</button><button class="s" data-a="ttest">Tester le score</button></div>'
+  +(T?'<div class="row"><b>TEST DU SCORE · '+dt(T.t)+'</b><b class="'+(T.ok?'up':'dn')+'">'+(T.ok?'RÉUSSI':'ÉCHEC')+'</b></div>'+T.R.map(r=>'<div class="row sm"><span>'+(r.ok?'✔':'✘')+' '+esc(r.n)+'</span><span class="g">'+esc(r.d)+'</span></div>').join(''):'')+'</div>',
+ dc='<h2>Décisions justifiées du Supervisor</h2><div class="card">'+((S.dc||[]).slice(0,12).map(d=>'<details style="border-top:1px solid #1677ff22;padding:6px 0"><summary class="sm" style="min-height:32px">'+dt(d.t)+' · <b>'+esc(d.s)+'</b> · '+esc(AGN[d.ag]||d.ag)+' · '+(d.v=='refusé'?'<b class="dn">refusé</b>':'<b class="up">'+esc(d.v)+'</b>')+' · score '+(d.sc==null?'n/d':d.sc)+(d.cal?'':' (indicatif)')+'</summary><div class="sm">'+esc(d.why)+(d.fx&&d.fx.length?'<br>Contradictions : '+d.fx.map(esc).join(' ; '):'')+'</div></details>').join('')||'<p class="g sm">Aucune décision enregistrée depuis cette version.</p>')+'</div>';
+ return t0().replace(/<div class="card"><b>Score collectif : indicatif, non calibré<\/b>[\s\S]*?<\/div><\/div>/,sc).replace('<h2>État des 9 agents</h2>',ca+dc+'<h2>État des 9 agents</h2>')}}
 /* ===== Phase 8.3a (étape 2) : moteur de backtest pur. Le moteur ne lit ni S, ni M, ni K, ni H : tout passe en paramètres.
    Décision à la CLÔTURE de la bougie j (indicateurs sur bougies ≤ j), exécution à l'OUVERTURE de j+1 (+ délai éventuel) : pas de look-ahead.
    Même bougie touchant stop et objectif : le stop est supposé touché en premier (hypothèse prudente). Spread et liquidité : non modélisés (aucune donnée). ===== */
@@ -803,13 +878,13 @@ const indK=(k,p)=>{const i=ti(k);return i?Object.assign(i,{p:p==null?i.p:p,f:sma
 function btMet(tr,cap,dd){const w=tr.filter(t=>t.pnl>0),l=tr.filter(t=>t.pnl<=0),sw=w.reduce((a,t)=>a+t.pnl,0),sl=-l.reduce((a,t)=>a+t.pnl,0),net=sw-sl,n=tr.length,R={};
  tr.forEach(t=>{const o=R[t.reg]=R[t.reg]||{n:0,net:0,w:0};o.n++;o.net+=t.pnl;if(t.pnl>0)o.w++});
  return{n,w:w.length,l:l.length,net,ret:net/cap*100,pf:sl>0?sw/sl:sw>0?Infinity:null,wr:n?w.length/n*100:null,exp:n?net/n:null,aw:w.length?sw/w.length:null,al:l.length?-sl/l.length:null,dd:dd*100,fees:tr.reduce((a,t)=>a+t.fees,0),slip:tr.reduce((a,t)=>a+t.slip,0),dur:n?tr.reduce((a,t)=>a+t.d,0)/n/6e4:null,reg:R}}
-function btInit(k,st,c,P,o){o=o||{};let w=118,g=0;for(let j=1;j<Math.min(118,k.length);j++)if(k[j].t-k[j-1].t!=6e4){g++;w=j+118}
- return{k,st,c,P,sd:o.sd||SD[st],dl:o.delay|0,C:o.cache||[],cc:Math.max(1,Math.ceil(c.cd/60)),j:118,cash:c.cap,pos:null,pd:null,od:null,cd:0,warm:w,tr:[],un:0,sg:0,sk:{},gaps:g,pk:c.cap,dd:0,fin:k.length<=119}}
+function btInit(k,st,c,P,o){o=o||{};let w=118,g=0;for(let j=1;j<Math.min(118,k.length);j++)if(k[j].t-k[j-1].t!=(o.bar||6e4)){g++;w=j+118}
+ return{k,st,c,P,bar:o.bar||6e4,sd:o.sd||SD[st],dl:o.delay|0,C:o.cache||[],cc:Math.max(1,Math.ceil(c.cd/60)),j:118,cash:c.cap,pos:null,pd:null,od:null,cd:0,warm:w,tr:[],un:0,sg:0,sk:{},gaps:g,pk:c.cap,dd:0,fin:k.length<=119}}
 const btI=(s,j)=>{let v=s.C[j];if(v===undefined)v=s.C[j]=indK(s.k.slice(j-118,j+1))||0;return v||null};
 function btX(s,x,px,why){const c=s.c,p=s.pos,ex=px*(1-c.slip/100),pr=p.q*ex,fe=pr*c.fee/100,pnl=pr-fe-(p.q*p.e+p.fee);s.cash+=pr-fe;s.tr.push({t0:p.t,t1:x.ct,e:p.e,x:ex,q:p.q,pnl,fees:p.fee+fe,slip:p.s0+p.q*px*c.slip/100,why,reg:p.reg,d:x.ct-p.t});s.pos=null}
-function btIn(s,x,j,d,px,s0){const f=s.c.fee/100,q=Math.min(d.q,s.cash/(px*(1+f)));if(!(q>0))return;const fe=q*px*f;s.cash-=q*px+fe;s.pos={e:px,q,fee:fe,t:x.t,j0:j,sl:d.sl,tp:d.tp,hi:px,reg:d.reg,s0:q/d.q*s0}}
+function btIn(s,x,j,d,px,s0){const f=s.c.fee/100,lq=x.v>0?x.v*.05:Infinity,q=Math.min(d.q,s.cash/(px*(1+f)),lq);if(q<d.q&&lq<=q)s.liq=(s.liq||0)+1;if(!(q>0))return;const fe=q*px*f;s.cash-=q*px+fe;s.pos={e:px,q,fee:fe,t:x.t,j0:j,sl:d.sl,tp:d.tp,hi:px,reg:d.reg,s0:q/d.q*s0}}
 function btStep(s,n){const k=s.k,c=s.c,f=c.fee/100,sp=c.slip/100,end=Math.min(k.length,s.j+n);
- for(let j=s.j;j<end;j++){const x=k[j];if(x.t-k[j-1].t!=6e4){s.gaps++;s.warm=j+118}
+ for(let j=s.j;j<end;j++){const x=k[j];if(x.t-k[j-1].t!=s.bar){s.gaps++;s.warm=j+118}
   if(s.pos&&s.pos.pend)btX(s,x,x.o,s.pos.pend);
   if(!s.pos&&s.pd&&j>=s.pd.at){btIn(s,x,j,s.pd,x.o*(1+sp),s.pd.q*x.o*sp);s.pd=null}
   if(!s.pos&&s.od&&j>=s.od.from){if(x.l<=s.od.lim){btIn(s,x,j,s.od,Math.min(x.o,s.od.lim),0);s.od=null}else if(j-s.od.from+1>=c.ordMin){s.un++;s.od=null}}
@@ -826,7 +901,7 @@ function btStep(s,n){const k=s.k,c=s.c,f=c.fee/100,sp=c.slip/100,end=Math.min(k.
   const e=s.cash+(s.pos?s.pos.q*x.c:0);s.pk=Math.max(s.pk,e);s.dd=Math.max(s.dd,(s.pk-e)/s.pk)}
  s.j=end;if(end>=k.length)s.fin=true}
 function btFin(s){const k=s.k,l=k.length-1;if(s.pos)btX(s,k[l],k[l].c,'fin de période (clôture forcée)');const f=s.c.fee/100,sp=s.c.slip/100,bh=l>119?(k[l].c*(1-sp)*(1-f))/(k[119].o*(1+sp)*(1+f))*100-100:null;
- return Object.assign(btMet(s.tr,s.c.cap,s.dd),{tr:s.tr,un:s.un,sg:s.sg,sk:s.sk,gaps:s.gaps,nc:k.length,bh,from:k[0].t,to:k[l].ct})}
+ return Object.assign(btMet(s.tr,s.c.cap,s.dd),{tr:s.tr,un:s.un,sg:s.sg,sk:s.sk,gaps:s.gaps,liq:s.liq||0,nc:k.length,bh,from:k[0].t,to:k[l].ct})}
 const btRun=(k,st,c,P,o)=>{const s=btInit(k,st,c,P,o);while(!s.fin)btStep(s,1e9);return btFin(s)};
 /* Pilote asynchrone : téléchargement paginé (données réelles uniquement), tranches de 500 bougies, progression, annulation */
 let BTX={st:'idle',stop:false,res:null,err:[],p:0,msg:''},LB={sym:'BTC',days:'3',st:'all'};const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -843,7 +918,7 @@ async function btLab(){if(BTX.st=='run')return;const sy=LB.sym=='all'?SY:[LB.sym
    const C=[];for(const st of ss){BTX.msg=sym+' · '+SD[st].n;const s=btInit(k,st,cfg,SP[st],{cache:C});while(!s.fin&&!BTX.stop){btStep(s,500);BTX.p=(dn+(s.j-118)/Math.max(1,k.length-118))/tot;lbProg();await sleep(0)}
     if(BTX.stop)break;rows.push(Object.assign({sym,st},btFin(s)));dn++;BTX.p=dn/tot;lbProg()}
    if(BTX.stop)break}}catch(e){BTX.err.push('erreur interne : '+e.message)}
- BTX.st=BTX.stop?'cancel':'done';BTX.p=BTX.stop?BTX.p:1;BTX.res=BTX.stop?null:{t:Date.now(),days:+LB.days,fee:cfg.fee,slip:cfg.slip,rows};render()}
+ BTX.st=BTX.stop?'cancel':'done';BTX.p=BTX.stop?BTX.p:1;BTX.res=BTX.stop?null:{t:Date.now(),days:+LB.days,fee:cfg.fee,slip:cfg.slip,rows};try{if(BTX.res)tmCalib(BTX.res)}catch(e){}render()}
 const labRes=R=>{const f=v=>v==null?'—':f2(v),pf=v=>v==null?'—':v===Infinity?'∞':f2(v),W=v=>v==null?'—':f2(v,0)+' %',rw=R.rows,A=Object.keys(SD).filter(k=>rw.some(r=>r.st==k)),P=btMet(rw.flatMap(r=>r.tr),1,0);
  return'<h2>Résultats ('+R.days+' j, frais '+R.fee+' %, slippage '+R.slip+' %)</h2>'+(rw.some(r=>r.n<30)?'<div class="warn sm">Moins de 30 transactions sur au moins une ligne : échantillon trop petit pour conclure. Aucune stratégie n\'est recommandée ici.</div>':'')
  +'<div class="card"><b>Par stratégie (tous actifs testés)</b>'+tbl(['Stratégie','Trans.','Net €','PF','Réuss.','Esp. €'],A.map(k=>{const m=btMet(rw.filter(r=>r.st==k).flatMap(r=>r.tr),1,0);return[SD[k].n,m.n,f(m.net),pf(m.pf),W(m.wr),f(m.exp)]}))+'</div>'
@@ -858,6 +933,288 @@ PAGES.lab=()=>{const run=BTX.st=='run',sel=(n,l,o)=>`<label class="sm">${l}</lab
  +(BTX.err.length?'<div class="warn sm">'+BTX.err.map(esc).join('<br>')+'</div>':'')+(BTX.st=='cancel'?'<div class="warn">Backtest annulé : aucun résultat conservé.</div>':'')+(BTX.res?labRes(BTX.res):'')};
 ACT.labgo=()=>btLab();ACT.labx=()=>{BTX.stop=true;BTX.msg='Annulation…';lbProg()};document.addEventListener('change',e=>{const d=e.target.dataset;if(d&&d.lb)LB[d.lb]=e.target.value});
 PG.splice(4,0,['lab','Labo']);
+/* ===== Phase 8.3 : AI Strategy Optimizer (Scalper et Opportunity séparés) ===== */
+let OPT={st:'idle',stop:false,p:0,msg:'',err:[]},OP={bot:'sc',sym:'all',days:'7'};
+const BAR={'1m':6e4,'5m':3e5,'15m':9e5,'1h':36e5,'4h':144e5},OG=[.75,1,1.25],omed=a=>{if(!a.length)return null;const b=[...a].sort((x,y)=>x-y),m=b.length>>1;return b.length%2?b[m]:(b[m-1]+b[m])/2},
+omean=a=>a.length?a.reduce((t,x)=>t+x,0)/a.length:null,oStr=(tr,f)=>omean(tr.map(t=>t.pnl-(f-1)*(t.fees+t.slip))),
+oPF=tr=>{const w=tr.filter(t=>t.pnl>0).reduce((a,t)=>a+t.pnl,0),l=-tr.filter(t=>t.pnl<=0).reduce((a,t)=>a+t.pnl,0);return l>0?w/l:w>0?Infinity:null},
+oDD=(tr,base)=>{let e=0,pk=0,dd=0;[...tr].sort((a,b)=>a.t1-b.t1).forEach(t=>{e+=t.pnl;pk=Math.max(pk,e);dd=Math.max(dd,(pk-e)/(base+pk))});return dd},
+oM=(tr,cap,ns)=>btMet(tr,cap*ns,oDD(tr,cap*ns)),oCfgs=P=>{const o=[];OG.forEach(a=>OG.forEach(b=>o.push({a,b,P:Object.assign({},P,{slM:P.slM*a,tpM:P.tpM*b})})));return o},
+oNb=i=>[0,1,2,3,4,5,6,7,8].filter(j=>Math.abs((i/3|0)-(j/3|0))<=1&&Math.abs(i%3-j%3)<=1);
+function oUnits(bot){if(bot=='sc')return Object.keys(SD).map(k=>({key:k,n:SD[k].n,tf:'1m',sd:SD[k],P:S.sp[k],st:k,en:S.strat[k]}));
+ return OKY.flatMap(k=>TFS.map(t=>({key:k+'|'+t,n:OSD[k].n+' '+TN[t],tf:t,sd:OSD[k],P:{slM:1.5,tpM:OSD[k].t*1.5},st:'o_'+k,en:S.ostrat[k]})))}
+function oCfg(bot){const c=Object.assign({},S.cfg,{cap:S.init});if(bot=='opp')Object.assign(c,{timeExit:1e7,trailAct:1e9,trail:1e9,minScore:50,minRR:S.cfg.oppMinRR,budget:S.cfg.oppBudget,cd:60});return c}
+function oProg(){const b=$('#opb'),m=$('#opm');if(b)b.style.width=Math.round(OPT.p*100)+'%';if(m)m.textContent=OPT.msg+' · '+Math.round(OPT.p*100)+' %'}
+async function oFetch(sym,iv,N){const seen=new Set();let out=[],end=Date.now();
+ while(out.length<N){if(OPT.stop)return null;const r=await bj('/api/v3/klines?symbol='+sym+'USDT&interval='+iv+'&limit=1000&endTime='+end);if(!r.length)break;
+  const ps=r.map(x=>({t:x[0],o:+x[1],h:+x[2],l:+x[3],c:+x[4],v:+x[5],ct:x[6]})).filter(x=>x.ct<Date.now()&&!seen.has(x.t)&&[x.o,x.h,x.l,x.c].every(isFinite)&&x.h>=x.l);
+  ps.forEach(x=>seen.add(x.t));out=ps.concat(out);end=r[0][0]-1;await sleep(120)}
+ out.sort((a,b)=>a.t-b.t);return out.slice(-N)}
+async function oRun(k,u,c,P,C,dl){const s=btInit(k,u.st,c,P,{sd:u.sd,bar:BAR[u.tf],cache:C,delay:dl||0});while(!s.fin){btStep(s,2000);if(OPT.stop)return null;await sleep(0)}return btFin(s)}
+/* Une unité = une stratégie (× un horizon pour Opportunity). 9 configurations = stop ×{.75,1,1.25} × objectif ×{.75,1,1.25} ; la configuration actuelle est le centre. */
+async function oUnit(u,DATA,sy,c,C){const cf=oCfgs(u.P),T=cf.map(()=>[]),syd=sy.filter(s=>DATA[s]&&DATA[s][u.tf]),why=[];let un=0,liq=0,gaps=0,a=Infinity,b=0;if(!syd.length)return null;
+ syd.forEach(s=>{const k=DATA[s][u.tf];a=Math.min(a,k[118]?k[118].t:k[0].t);b=Math.max(b,k[k.length-1].ct)});
+ const ck=s=>C[s+u.tf]||(C[s+u.tf]=[]),run=async(ci,dl)=>{const o=[];for(const s of syd){const r=await oRun(DATA[s][u.tf],u,c,cf[ci].P,ck(s),dl);if(!r)return null;r.tr.forEach(t=>t.sym=s);o.push(...r.tr);if(!dl&&ci==4){un+=r.un;liq+=r.liq;gaps+=r.gaps}}return o};
+ for(let ci=0;ci<9;ci++){const r=await run(ci,0);if(!r)return null;T[ci]=r}
+ const sp=b-a,t1=a+.5*sp,t2=a+.75*sp,W=[a,a+.25*sp,a+.5*sp,a+.75*sp,b+1],ph=(L,x,y)=>L.filter(t=>t.t0>=x&&t.t0<y),
+ X=T.map(L=>({tr:ph(L,a,t1),va:ph(L,t1,t2),te:ph(L,t2,Infinity)})),rob=(i,sel)=>omed(oNb(i).map(j=>oStr(sel(j),1.5)).filter(v=>v!=null)),
+ pick=(sel,mn,ok)=>{let bi=-1,bs=-Infinity;for(let i=0;i<9;i++){if(sel(i).length<mn)continue;const r=rob(i,sel);if(r!=null&&r>0&&(!ok||ok(i))&&r>bs){bs=r;bi=i}}return bi},
+ best=pick(i=>X[i].tr,30,i=>X[i].va.length>=10&&oStr(X[i].va,1)>0);
+ let rep=best>=0?best:4;
+ const WF=[];for(let f=1;f<=3;f++){const sel=i=>ph(T[i],a,W[f]),pk=pick(sel,20);if(pk>=0)WF.push(...ph(T[pk],W[f],W[f+1]))}
+ const wfRep=[];for(let f=1;f<=3;f++)wfRep.push(...ph(T[rep],W[f],W[f+1]));
+ const te=X[rep].te,cu=X[4].te,bh=[],sr=[];
+ syd.forEach(s=>{const k=DATA[s][u.tf],j=k.findIndex(x=>x.t>=t2);if(j>=0&&j<k.length-1){const fe=c.fee/100,sl=c.slip/100;bh.push(((k[k.length-1].c*(1-sl)*(1-fe))/(k[j].o*(1+sl)*(1+fe))-1)*100)}sr.push(te.filter(t=>t.sym==s).reduce((x,t)=>x+t.pnl,0)/c.cap*100)});
+ const m=L=>{const q=oM(L,c.cap,syd.length);return{n:q.n,net:q.net,exp:q.exp,pf:q.pf==Infinity?null:q.pf,wr:q.wr,aw:q.aw,al:q.al,dd:q.dd,fees:q.fees,slip:q.slip,dur:q.dur}},
+ symOk=syd.filter(s=>te.some(t=>t.sym==s)),pos=symOk.filter(s=>te.filter(t=>t.sym==s).reduce((x,t)=>x+t.pnl,0)>0).length;
+ if(best<0)why.push('aucune configuration ne passe apprentissage (≥ 30 transactions, voisinage rentable sous frais ×1,5) puis validation');
+ if(te.length<15)why.push('test hors échantillon : '+te.length+' transaction(s) < 15 (échantillon trop petit)');
+ else{if(!(oStr(te,1)>0))why.push('espérance nette ≤ 0 sur le test');if(!(oStr(te,1.5)>0))why.push('espérance ≤ 0 si frais et slippage ×1,5');const pf=oPF(te);if(!(pf>1.1))why.push('profit factor test '+(pf==null?'n/d':f2(pf))+' ≤ 1,1');
+  if(symOk.length&&pos*2<symOk.length)why.push('rentable sur '+pos+' actif(s) seulement sur '+symOk.length);}
+ if(wfRep.length<15||!(oStr(wfRep,1)>0))why.push('walk-forward : '+wfRep.length+' transaction(s), espérance '+(wfRep.length?f2(oStr(wfRep,1)):'n/d')+' € (non positive ou échantillon insuffisant)');
+ if(rep!=4&&best>=0&&te.length>=15&&!(oStr(te,1)>oStr(cu,1)))why.push('pas meilleure que la configuration actuelle sur le test');
+ if(!why.length){const dl=await run(rep,1);if(!dl)return null;const d=ph(dl,t2,Infinity);if(!(oStr(d,1)>0))why.push('espérance non positive avec 1 bougie de délai d\'exécution')}
+ const ok=!why.length;
+ return{key:u.key,n:u.n,tf:u.tf,en:u.en,ns:syd.length,ok,why,rep,a:cf[rep].a,b:cf[rep].b,cur:u.P,prop:cf[rep].P,t1,t2,
+  ph:{tr:m(X[rep].tr),va:m(X[rep].va),te:m(te),wf:m(wfRep),cur:m(cu),wfSel:m(WF)},bh:omean(bh),sr:omean(sr),un,liq,gaps,
+  as:syd.map(s=>{const q=m(te.filter(t=>t.sym==s));return[s,q.n,q.net,q.pf,q.wr]}),rg:Object.entries(btMet(te,1,0).reg).map(([k,v])=>[k,v.n,v.net,v.w/v.n*100])}}
+async function optGo(){if(OPT.st=='run')return;const bot=OP.bot,sy=OP.sym=='all'?SY:[OP.sym],U=oUnits(bot),tfs=[...new Set(U.map(u=>u.tf))],c=oCfg(bot),DATA={},C={},res=[];
+ OPT={st:'run',stop:false,p:0,msg:'Démarrage…',err:[]};render();
+ try{let n0=0;for(const s of sy){DATA[s]={};for(const tf of tfs){if(OPT.stop)break;OPT.msg='Téléchargement '+s+' '+tf;oProg();
+   try{const k=await oFetch(s,tf,tf=='1m'?+OP.days*1440:1000);if(k&&k.length>=300)DATA[s][tf]=k;else if(k)OPT.err.push(s+' '+tf+' : historique insuffisant ('+k.length+' bougies), aucune bougie inventée')}catch(e){OPT.err.push(s+' '+tf+' : données indisponibles')}
+   n0++;OPT.p=.3*n0/(sy.length*tfs.length)}}
+  for(let i=0;i<U.length&&!OPT.stop;i++){OPT.msg=(bot=='sc'?'Scalper · ':'Opportunity · ')+U[i].n;oProg();const r=await oUnit(U[i],DATA,sy,c,C);if(r)res.push(r);else if(!OPT.stop)OPT.err.push(U[i].n+' : données insuffisantes');OPT.p=.3+.7*(i+1)/U.length;oProg()}}
+ catch(e){OPT.err.push('erreur interne : '+e.message)}
+ if(OPT.stop){OPT.st='cancel'}else{OPT.st='done';(S.ores=S.ores||{})[bot]={t:Date.now(),days:bot=='sc'?+OP.days:null,fee:c.fee,slip:c.slip,ns:sy.length,err:OPT.err.slice(),units:res};save()}
+ render()}
+ACT.opgo=()=>optGo();ACT.opx=()=>{OPT.stop=true;OPT.msg='Annulation…'};
+document.addEventListener('change',e=>{const d=e.target.dataset;if(d&&d.op){OP[d.op]=e.target.value;render()}});
+const onf=v=>v==null?'—':f2(v),opf=v=>v==null?'—':f2(v);
+function oLive(b){const h=S.hist.filter(x=>agOf(x)==b&&!/partielle/.test(x.why)).map(x=>({pnl:x.pnl,fees:x.fees,slip:0,d:0,reg:x.reg||'n/d',t1:x.t})),q=btMet(h,S.init,oDD(h,S.init)),p=tmPerf(b),ln=a=>a.length?a.slice(0,5).map(e=>esc(e[0])+' '+f2(e[1].net)+' € ('+e[1].n+')').join(' · '):'—';
+ return'<div class="card"><b>'+(b=='sc'?'AI Scalper':'AI Opportunity Trader')+' · simulation réelle</b>'+(q.n<30?'<div class="sm g">'+q.n+' clôture(s) : indicatif, échantillon trop petit pour conclure.</div>':'')
+ +row('Rendement net',f2(q.net)+' € ('+f2(q.ret)+' %)')+row('Profit factor',q.pf==null?'—':q.pf===Infinity?'∞':f2(q.pf))+row('Taux de réussite',q.wr==null?'—':f2(q.wr,0)+' %')+row('Espérance nette',onf(q.exp)+' €')+row('Gain moyen / perte moyenne',onf(q.aw)+' € / '+onf(q.al)+' €')
+ +row('Drawdown maximal',f2(q.dd)+' %')+row('Frais cumulés',f2(q.fees)+' €')+row('Slippage · durée moyenne','non enregistrés par transaction dans l\'historique réel')+row('Transactions',q.n)
+ +'<div class="sm" style="margin-top:6px"><b>Par actif :</b> '+ln(p.as)+'<br><b>Par stratégie :</b> '+ln(p.st)+'<br><b>Par régime :</b> '+ln(p.rg)+'</div></div>'}
+function oUnitHtml(u){const P=Object.keys(u.cur).filter(k=>k=='slM'||k=='tpM'),ph=(l,m)=>[l,m.n,opf(m.net),opf(m.exp),m.pf==null?'—':f2(m.pf),m.wr==null?'—':f2(m.wr,0)+' %',opf(m.aw),opf(m.al),f2(m.dd),opf(m.fees),opf(m.slip),m.dur==null?'—':f2(m.dur,0)];
+ return'<details style="border-top:1px solid #1677ff22;padding:6px 0"><summary class="sm" style="min-height:32px"><b>'+esc(u.n)+'</b> · '+(u.ok?'<b class="up">robuste</b>':'<b class="dn">non fiable</b>')+' · test : '+u.ph.te.n+' trans., esp. '+opf(u.ph.te.exp)+' €'+(u.en?'':' · <span class="g">stratégie désactivée dans le bot</span>')+'</summary><div class="sm">'
+ +'<div style="margin:4px 0">'+(u.ok?(u.rep==4?'Configuration actuelle conservée : la plus robuste.':'<b class="up">Amélioration fiable :</b> stop × '+u.a+', objectif × '+u.b+' (SL '+f2(u.prop.slM,2)+' ATR, TP '+f2(u.prop.tpM,2)+' ATR, actuel '+f2(u.cur.slM,2)+' / '+f2(u.cur.tpM,2)+'). À valider par vous : rien n\'est modifié automatiquement.'):'<b class="dn">Aucune amélioration fiable.</b> '+u.why.map(esc).join(' ; ')+'.')+'</div>'
+ +tbl(['Phase','Trans.','Net €','Esp. €','PF','Réuss.','Gain moy.','Perte moy.','DD %','Frais €','Slip. €','Durée min'],[ph('Apprentissage (50 %)',u.ph.tr),ph('Validation (25 %)',u.ph.va),ph('Test (25 %, une seule lecture)',u.ph.te),ph('Walk-forward (hors échantillon)',u.ph.wf),ph('Configuration actuelle · test',u.ph.cur)])
+ +row('Achat-conservation sur la période de test',u.bh==null?'—':f2(u.bh)+' %')+row('Stratégie sur le même test (capital total, exposition partielle)',u.sr==null?'—':f2(u.sr)+' %')
+ +tbl(['Actif (test)','Trans.','Net €','PF','Réuss.'],u.as.map(r=>[r[0],r[1],opf(r[2]),r[3]==null?'—':f2(r[3]),r[4]==null?'—':f2(r[4],0)+' %']))
+ +tbl(['Régime (test)','Trans.','Net €','Réuss.'],u.rg.map(r=>[r[0],r[1],opf(r[2]),f2(r[3],0)+' %']))
+ +'<div class="g">Ordres limites non exécutés : '+u.un+' · entrées réduites par la liquidité : '+u.liq+' · trous de données signalés : '+u.gaps+'</div></div></details>'}
+PAGES.opt=()=>{const run=OPT.st=='run',R=(S.ores||{})[OP.bot],sel=(n,l,o)=>'<label class="sm">'+l+'</label><select data-op="'+n+'" '+(run?'disabled':'')+'>'+o.map(x=>'<option value="'+x[0]+'" '+(OP[n]==x[0]?'selected':'')+'>'+x[1]+'</option>').join('')+'</select>',nm=OP.bot=='sc'?'AI Scalper':'AI Opportunity Trader';
+ let b='';if(R){const ok=R.units.filter(u=>u.ok).sort((x,y)=>y.ph.te.exp-x.ph.te.exp),rest=R.units.filter(u=>!u.ok);
+  b='<h2>Résultats · '+nm+'</h2><div class="'+(ok.length?'card':'warn')+'"><b>'+(ok.length?ok.length+' stratégie(s) robuste(s) sur '+R.units.length+' testées':'Aucune amélioration fiable trouvée : conservez vos réglages actuels.')+'</b><div class="sm g">'+dt(R.t)+' · '+R.ns+' actif(s)'+(R.days?' · '+R.days+' jours de bougies 1 min':' · 1 000 bougies par horizon (5 min à 4 h)')+' · frais '+R.fee+' % · slippage '+R.slip+' %. Classement par espérance nette hors échantillon, jamais par nombre de transactions.</div></div>'
+   +(R.err.length?'<div class="warn sm">'+R.err.map(esc).join('<br>')+'</div>':'')+'<div class="card">'+ok.concat(rest).map(oUnitHtml).join('')+'</div>'}
+ return banners()+'<div class="card"><b>AI Strategy Optimizer</b><div class="sm g">Compare les stratégies réellement présentes dans le code et 9 configurations de stop et d\'objectif autour de vos réglages actuels, bot par bot. Simulation uniquement : aucun gain n\'est garanti et rien n\'est appliqué sans vous.</div>'
+  +sel('bot','Bot',[['sc','AI Scalper (5 stratégies, 1 min)'],['opp','AI Opportunity Trader (7 stratégies × 4 horizons)']])+sel('sym','Actif',[['all','Tous les actifs'],...SY.map(s=>[s,s])])+(OP.bot=='sc'?sel('days','Historique',[['3','3 jours'],['7','7 jours'],['14','14 jours']]):'')
+  +'<div class="btns"><button data-a="opgo" '+(run?'disabled':'')+'>Lancer l\'optimisation</button>'+(run?'<button class="d" data-a="opx">Annuler</button>':'')+'</div></div>'
+  +(run?'<div class="card"><div id="opm" class="sm"></div><div style="background:#1677ff22;border-radius:6px;height:8px"><div id="opb" style="background:#32A8FF;height:8px;border-radius:6px;width:'+Math.round(OPT.p*100)+'%"></div></div></div>':'')
+  +(OPT.st=='cancel'?'<div class="warn">Optimisation annulée : aucun résultat conservé.</div>':'')+b
+  +'<h2>Performance réelle des bots (séparée)</h2>'+oLive('sc')+oLive('opp')
+  +'<div class="card sm g"><b>Méthode et limites</b><br>Bougies Binance réelles, aucune bougie inventée, trous signalés. Décision à la clôture, exécution à l\'ouverture suivante (+ 1 bougie de délai testée sur la configuration retenue). Frais d\'achat et de vente, slippage, ordres limites non exécutés (Mean Reversion), liquidité (taille ≤ 5 % du volume de la bougie). Spread : non disponible dans les bougies, non modélisé. '
+  +'Chronologie : apprentissage 50 % · validation 25 % · test 25 % (lu une seule fois pour accepter ou rejeter) · walk-forward sur 4 fenêtres. Sélection : médiane de la configuration et de ses voisins sous frais et slippage ×1,5, pas la meilleure configuration isolée. Recommandation : ≥ 15 transactions de test, espérance > 0 (aussi à frais ×1,5), profit factor > 1,1, walk-forward > 0, rentable sur la majorité des actifs, délai d\'1 bougie supporté. '
+  +'<b>Limites :</b> les périodes des indicateurs (RSI 14, MA 20/50, ATR 14) sont fixes dans le moteur et ne sont pas optimisées ; Opportunity est testé horizon par horizon, sans confirmation multi-horizons, avec un stop de 1,5 ATR, sans vente partielle ni stop suiveur ; chaque actif a son propre capital virtuel (pas d\'interaction de portefeuille).</div>'};
+PG.splice(5,0,['opt','Optimiseur']);
+/* ===== Phase 8.4 : apprentissage statistique (mémoire de performance, conformité, diagnostic des pertes, recommandations validées hors échantillon).
+   Statistiques descriptives et tests chronologiques uniquement : AUCUN modèle de machine learning n'est implémenté. Rien n'est modifié automatiquement. ===== */
+const PJ=()=>Array.isArray(S.pj)?S.pj:(S.pj=[]),PD=()=>Array.isArray(S.pdg)?S.pdg:(S.pdg=[]),PW=()=>Array.isArray(S.ppw)?S.ppw:(S.ppw=[]),
+MINT=60,MINA=20,MINB=8,TD=1.5,FAM=st=>/^(o_)?(rev|rvs)$/.test(st),
+PRI=(rv,rg)=>(rv?{'latéral':70,baissier:55,volatil:50,haussier:45,inconnu:40}:{haussier:80,volatil:65,'latéral':40,baissier:20,inconnu:40})[rg],
+pmEx=w=>/Seller/.test(w)?'sortie Seller':/stop au seuil/.test(w)?'stop seuil de rentabilité':/trailing/.test(w)?'trailing stop':/stop/.test(w)?'stop-loss':/take-profit/.test(w)?'take-profit':/temporelle/.test(w)?'sortie temporelle':/invalid|signal de sortie/.test(w)?'signal de sortie':/manuelle/.test(w)?'manuel':/urgence/.test(w)?'arrêt d\'urgence':'autre',
+DGL={entree:`Mauvaise entrée ?`,tardif:`Signal trop tardif ?`,volume:`Volume insuffisant ?`,regime:`Mauvais régime de marché ?`,stop:`Stop trop serré ?`,tp:`Take-profit irréaliste ?`,frais:`Frais trop élevés ?`,slip:`Slippage excessif ?`,invalide:`Signal invalidé ?`,coord:`Mauvaise coordination entre agents ?`},
+DGS={entree:'Entrée',tardif:'Tardif',volume:'Volume',regime:'Régime',stop:'Stop',tp:'TP',frais:'Frais',slip:'Slip.',invalide:'Invalidé',coord:'Coord.'},
+ERR={entree:`revoir les conditions d'entrée (filtres de confirmation)`,tardif:`durcir le filtre d'extension (RSI, Bollinger, écart à la MA20)`,volume:`exiger un volume relatif minimal à l'entrée`,regime:`restreindre la stratégie aux régimes où elle gagne`,stop:`tester un stop plus large dans l'Optimiseur`,tp:`tester un objectif plus proche dans l'Optimiseur`,frais:`relever le R/R net minimal ou l'objectif`,slip:`privilégier les ordres limites et les actifs liquides`,invalide:`revoir la règle de sortie par signal`,coord:`renforcer le traitement des contradictions entre agents`},
+I_=r=>r.en&&r.en.i,
+DIM={st:['Stratégie',r=>r.stn],s:['Actif',r=>r.s],reg:['Régime de marché (entrée)',r=>r.reg],tf:['Unité de temps',r=>r.tf],sig:['Type de signal (nature · ordre)',r=>r.sig],
+ rsi:['Entrée · RSI',r=>{const i=I_(r);return i?i.r<30?'RSI < 30':i.r<50?'RSI 30–50':i.r<70?'RSI 50–70':'RSI ≥ 70':'n/d'}],
+ vol:['Entrée · volume relatif',r=>{const i=I_(r);return i?i.vr<.8?'volume < ×0,8':i.vr<1.2?'volume ×0,8–1,2':i.vr<1.5?'volume ×1,2–1,5':'volume ≥ ×1,5':'n/d'}],
+ trd:['Entrée · tendance et MACD',r=>{const i=I_(r);return i?(i.up?'prix > MA50':'prix < MA50')+' · MACD '+(i.mh?'>':'≤')+' signal':'n/d'}],
+ ext:['Entrée · extension (écart à la MA20)',r=>{const i=I_(r);return i?i.ex<0?'sous la MA20':i.ex<1?'0–1 ATR':i.ex<2?'1–2 ATR':'≥ 2 ATR':'n/d'}],
+ ex:['Sortie · condition de sortie',r=>r.ex],dur:['Sortie · durée de détention',r=>r.d==null?'n/d':r.d<5?'< 5 min':r.d<20?'5–20 min':r.d<60?'20–60 min':'≥ 60 min']};
+/* Contexte d'entrée figé sur la position (persisté avec S.pos) : indicateurs, régime, plan, alertes inter-agents */
+function pmEn(p){const i=p.tf&&agOf(p)=='opp'?tfi(p.s,p.tf):ind(p.s),m=p.tm||{};
+ return{t:Date.now(),tf:p.tf||'1m',ty:p.type||'market',pe:p.entry,sl:p.sl,tp:p.tp,rr:p.rr,rk:p.risk,reg:m.reg||regime(p.s),sc:m.sc==null?null:m.sc,cf:PHX&&PHX.conf!=null?PHX.conf:null,fx:(m.fx||[]).filter(f=>f.s>0).map(f=>f.k),k:(m.dec||{}).k||1,
+  i:i?{r:+i.r.toFixed(1),mh:i.mh>0?1:0,vr:+i.vr.toFixed(2),a:+(i.a/i.p*100).toFixed(3),up:i.p>i.s50?1:0,ex:i.a>0?+((i.p-i.m)/i.a).toFixed(2):0,bb:i.p>i.bu?1:i.p<i.bl?-1:0}:null}}
+{const s0=supervise;supervise=function(p,xr){const ok=s0(p,xr);try{if(ok&&p.st!='test'){const en=pmEn(p),o=S.ord[0];if(o&&o.s==p.s){const x=S.pos.find(q=>q.oid==o.id);if(x)x.en=en;else o.en=en}}}catch(e){}return ok}}
+{const f0=fill;fill=function(o,q,px){const r=f0(o,q,px);try{if(o.en){const x=S.pos.find(p=>p.oid==o.id);if(x&&!x.en)x.en=o.en}}catch(e){}return r}}
+{const m0=monitor;monitor=function(){try{S.pos.forEach(x=>{if(fresh(x.s))x.lo=Math.min(x.lo==null?x.e:x.lo,M[x.s].p)});pmWatch()}catch(e){}return m0()}}
+{const p0=partial;partial=function(x,fr,why,px){const r=p0(x,fr,why,px),h=S.hist[0];if(h&&h.s==x.s&&/partielle/.test(h.why)){const q=x.pp=x.pp||{pnl:0,fees:0,n:0};q.pnl+=h.pnl;q.fees+=h.fees;q.n++}return r}}
+{const c0=close;close=function(x,why,px){const pre={t:x.t,hi:x.hi,lo:x.lo,e:x.e,st:x.st,tf:x.tf,s:x.s,en:x.en,pp:x.pp},ag=agOf(x),nm=stName(x),r=c0(x,why,px);
+ try{const h=S.hist[0];if(h&&h.s==pre.s&&Date.now()-h.t<2000&&!/partielle/.test(h.why)&&!PJ().some(q=>q.t==h.t&&q.s==h.s))pmClose(pre,h,ag,nm)}catch(e){log('Admin','erreur','Mémoire : '+e.message)}return r}}
+/* Conformité à la stratégie initiale : règles objectives, comparées au plan enregistré à l'entrée */
+function pmConf(r){const c=S.cfg,en=r.en,I=[];if(!en)return{ok:null,I:[`entrée non enregistrée (position antérieure à cette version) : conformité non évaluable`]};
+ if(en.pe>0&&Math.abs(r.e/en.pe-1)>2*c.slip/100)I.push(`prix d'entrée exécuté écarté de ${f2((r.e/en.pe-1)*100)} % du prix prévu`);
+ if(r.R!=null&&r.R<-1.5)I.push(`perte de ${f2(-r.R)} R, supérieure au risque prévu (gap ou stop franchi)`);
+ if(r.ex=='stop-loss'&&en.sl>0&&r.x<en.sl*(1-2*c.slip/100))I.push(`sortie ${f2((en.sl-r.x)/en.sl*100)} % sous le stop prévu`);
+ if(['manuel','arrêt d\'urgence','autre'].includes(r.ex))I.push(`sortie hors règles de la stratégie (${r.ex})`);
+ if(r.ag=='sc'&&r.d>c.timeExit+2)I.push(`durée ${r.d} min > sortie temporelle (${c.timeExit} min)`);
+ return{ok:!I.length,I}}
+/* Diagnostic d'une perte : 10 questions, verdicts oui / non / n/d (donnée absente) / na (sans objet), preuve chiffrée pour tout verdict autre que « non » */
+function pmDiag(r){const c=S.cfg,en=r.en,i=en&&en.i,rv=FAM(r.st),o=[],A=(k,v,e)=>o.push({k,v,e:v=='non'?'':e||''}),f=(x,d)=>f2(x,d==null?2:d),
+ rp=en?r.e-en.sl:0,mfe=rp>0?(r.hi-r.e)/rp:null,pr=en?PRI(rv,en.reg):null,sx=r.ex=='stop-loss',ND=`contexte d'entrée non enregistré`;
+ if(mfe==null)A('entree','n/d',ND);else A('entree',mfe<.25?'oui':'non',`le cours n'a jamais progressé de plus de ${f(mfe)} R avant la sortie (${r.d} min)`);
+ if(!i)A('tardif','n/d',ND);else A('tardif',(rv?i.r>45:i.r>70||i.bb>0||i.ex>=2)?'oui':'non',`RSI ${f(i.r,0)}, écart à la MA20 ${f(i.ex)} ATR${i.bb>0?', au-dessus de la bande de Bollinger haute':''}${rv?' (retournement : RSI déjà remonté)':''}`);
+ if(!i)A('volume','n/d',ND);else A('volume',i.vr<.8?'oui':'non',`volume relatif ×${f(i.vr)} à l'entrée (< ×0,8)`);
+ if(!en)A('regime','n/d',ND);else{const s=pmStat(PJ().filter(q=>q.id!=r.id&&q.ag==r.ag&&q.st==r.st&&q.reg==en.reg)),ch=r.rx!=en.reg&&PRI(rv,r.rx)<=40&&pr>40;
+  if(s.n>=10&&s.exp<0)A('regime','oui',`cette stratégie perd en régime ${en.reg} : ${s.n} trades, espérance ${f(s.exp)} €`);else if(pr<=40)A('regime','oui',`régime ${en.reg} défavorable a priori à ce type de stratégie (hypothèse de travail, non mesurée)`);
+  else if(ch)A('regime','oui',`régime passé de ${en.reg} à ${r.rx} pendant la position`);else A('regime','non')}
+ if(!sx)A('stop','na',`sans objet : sortie par ${r.ex}`);else if(!i)A('stop','n/d',ND);else{const sa=rp/r.e*100/i.a;
+  if(sa<1)A('stop','oui',`stop à ${f(sa)} ATR de l'entrée (< 1 ATR)`);else if(!r.post)A('stop','n/d',`suivi post-sortie en cours`);else if(!r.post.ok)A('stop','n/d',`suivi post-sortie incomplet (application fermée ou données absentes)`);
+  else if(r.post.h>=r.e)A('stop','oui',`cours revenu à ${f(r.post.h,4)} € (≥ entrée ${f(r.e,4)} €) après la sortie`);else A('stop','non')}
+ if(!en)A('tp','n/d',ND);else if(sx)A('tp','na',`sans objet : sortie par stop`);else{const rc=en.tp>r.e?(r.hi-r.e)/(en.tp-r.e):null;A('tp',r.ex=='sortie temporelle'&&rc!=null&&rc<.5?'oui':'non',`objectif non atteint dans le délai : ${rc==null?'n/d':f(rc*100,0)} % du chemin parcouru`)}
+ {const g=r.pnl+r.fees,sh=r.fees/Math.abs(r.pnl);A('frais',g>0||sh>=.4?'oui':'non',g>0?`gain brut de ${f(g)} € absorbé par ${f(r.fees)} € de frais`:`frais = ${f(sh*100,0)} % de la perte`)}
+ {const nt=c.fee>0?r.fees/(2*c.fee/100):0,se=nt*c.slip/100*2,ov=en&&sx&&en.sl>0?(en.sl-r.x)/en.sl*100:null;
+  if(ov!=null&&ov>2*c.slip)A('slip','oui',`sortie ${f(ov)} % sous le stop prévu (slippage modélisé ${f(c.slip)} %)`);else if(se>0&&se/-r.pnl>=.25)A('slip','oui',`slippage modélisé ≈ ${f(se)} € = ${f(se/-r.pnl*100,0)} % de la perte (modèle fixe, pas une mesure sur carnet réel)`);else A('slip','non')}
+ if(r.ex=='signal de sortie')A('invalide','oui',`la stratégie a invalidé elle-même son signal d'entrée`);else if(pr!=null&&PRI(rv,r.rx)<=40&&pr>40)A('invalide','oui',`régime devenu défavorable (${en.reg} → ${r.rx})`);else A('invalide',en?'non':'n/d',ND);
+ if(!en)A('coord','n/d',ND);else{const k=(en.fx||[]).filter(x=>['tendance','contradiction','conflit','autre bot','corrélation','défaillance'].includes(x));A('coord',k.length?'oui':'non',`alertes signalées avant l'entrée : ${k.join(', ')}${en.k<1?` ; taille réduite à ${Math.round(en.k*100)} %`:''} (un désaccord seul ne bloque pas l'ordre)`)}
+ return o}
+function pmClose(x,h,ag,nm){const en=x.en,pp=x.pp||{pnl:0,fees:0,n:0},pnl=h.pnl+pp.pnl,r={id:'J'+h.t.toString(36)+x.s,t:h.t,t0:x.t,s:x.s,ag,st:x.st,stn:nm,tf:x.tf||(en&&en.tf)||'1m',reg:(en&&en.reg)||h.reg||'n/d',rx:regime(x.s),
+  sig:(FAM(x.st)?'contre-tendance':'continuation')+' · '+(en&&en.ty=='limit'?'limite':'marché'),ex:pmEx(h.why),why:h.why,pnl,fees:h.fees+pp.fees,e:x.e,x:h.x,hi:x.hi,lo:x.lo==null?null:x.lo,en,pp:pp.n,d:Math.round((h.t-x.t)/6e4)};
+ r.R=en&&en.rk>0?pnl/en.rk:null;const cf=pmConf(r);r.cf=cf.ok==null?null:cf.ok?1:0;r.ci=cf.I;PJ().unshift(r);if(S.pj.length>800)S.pj.length=800;
+ if(pnl<0){const it=pmDiag(r),tags=it.filter(i=>i.v=='oui').map(i=>i.k);PD().unshift({id:'D'+r.id,rid:r.id,t:h.t,ag,stn:nm,s:x.s,reg:r.reg,tf:r.tf,pnl,R:r.R,cf:r.cf,ci:r.ci,items:it,tags});if(S.pdg.length>400)S.pdg.length=400;
+  if(r.ex=='stop-loss')PW().push({id:r.id,u:Date.now()+(ag=='opp'?Math.min(4*BAR[r.tf]||72e5,72e5):18e5)});
+  log('Supervisor','diagnostic',x.s+' perte '+f2(pnl)+' € : diagnostic en 10 points enregistré'+(tags.length?' ('+tags.join(', ')+')':' (aucune erreur identifiée : perte dans le cadre normal)'))}}
+/* Suivi post-sortie d'un stop (30 min Scalper, 4 bougies max 2 h Opportunity) : le cours est-il revenu à l'entrée ? Couverture vérifiée, sinon verdict « n/d » */
+function pmWatch(){const now=Date.now(),W=PW();for(let k=W.length-1;k>=0;k--){const w=W[k],r=PJ().find(q=>q.id==w.id);if(!r){W.splice(k,1);continue}
+ if(M[r.s]&&fresh(r.s)){w.f=w.f||now;w.l=now;w.h=Math.max(w.h||0,M[r.s].p)}
+ if(now>=w.u){r.post={h:w.h||null,ok:w.f&&w.f-r.t<12e4&&w.u-w.l<12e4?1:0};W.splice(k,1);const d=PD().find(q=>q.rid==r.id);if(d){const n=pmDiag(r).find(i=>i.k=='stop');d.items=d.items.map(i=>i.k=='stop'?n:i);d.tags=d.items.filter(i=>i.v=='oui').map(i=>i.k)}}}}
+if(!Array.isArray(S.pj))S.pj=S.hist.filter(h=>!/partielle/.test(h.why)).map(h=>({id:'H'+h.t,t:h.t,t0:null,s:h.s,ag:agOf(h),st:h.st,stn:stName(h),tf:agOf(h)=='sc'?'1m':'n/d',reg:h.reg||'n/d',rx:'n/d',sig:'n/d',ex:pmEx(h.why),why:h.why,pnl:h.pnl,fees:h.fees,e:h.e,x:h.x,en:null,R:null,pp:0,d:null,cf:null,ci:[],bf:1}));
+/* Statistiques : toujours un échantillon n affiché ; IC95 de la réussite (Wilson) et de l'espérance (± 1,96 erreur-type) */
+function pmStat(a){const n=a.length,p=a.map(x=>x.pnl),net=p.reduce((t,x)=>t+x,0),m=n?net/n:0,sd=n>1?Math.sqrt(p.reduce((t,x)=>t+(x-m)**2,0)/(n-1)):0,w=a.filter(x=>x.pnl>0),sw=w.reduce((t,x)=>t+x.pnl,0),sl=-a.filter(x=>x.pnl<=0).reduce((t,x)=>t+x.pnl,0),Rs=a.filter(x=>x.R!=null).map(x=>x.R);
+ return{n,w:w.length,wr:n?w.length/n*100:null,net,exp:n?m:null,se:n>1?sd/Math.sqrt(n):null,t:n>1&&sd>0?m/(sd/Math.sqrt(n)):null,pf:sl>0?sw/sl:sw>0?Infinity:null,R:Rs.length?Rs.reduce((t,x)=>t+x,0)/Rs.length:null,fees:a.reduce((t,x)=>t+x.fees,0)}}
+const wil=(w,n)=>{if(!n)return[0,0];const z=1.96,p=w/n,d=1+z*z/n,c=(p+z*z/(2*n))/d,h=z*Math.sqrt(p*(1-p)/n+z*z/(4*n*n))/d;return[(c-h)*100,(c+h)*100]},rel=n=>n<10?'<span class="g">insuffisant</span>':n<30?'<span class="g">indicatif</span>':'<span class="up">exploitable</span>';
+/* Recommandations : découverte sur les 60 % de clôtures les plus anciennes, validation sur les 40 % récentes. Hypothèse retenue seulement si même sens et meilleure/pire que le reste du bot hors échantillon. */
+function pmReco(ag){const A=PJ().filter(r=>r.ag==ag).sort((a,b)=>a.t-b.t),n=A.length,cut=Math.floor(n*.6),D=A.slice(0,cut),V=A.slice(cut),o={n,nd:D.length,nv:V.length,test:0,ok:[],pend:[],rej:0,err:[]};if(n<MINT)return o;
+ const seg=[];['st','s','reg','tf','sig','rsi','vol','trd','ext'].forEach(d=>[...new Set(A.map(DIM[d][1]))].filter(k=>k!='n/d').forEach(k=>seg.push({l:DIM[d][0]+' : '+k,f:r=>DIM[d][1](r)==k})));
+ [...new Set(A.map(r=>r.stn+' × '+r.reg))].filter(k=>!/n\/d/.test(k)).forEach(k=>seg.push({l:'Stratégie × régime : '+k,f:r=>r.stn+' × '+r.reg==k}));
+ seg.forEach(g=>{const a=pmStat(D.filter(g.f));if(a.n<MINA||a.t==null)return;o.test++;if(Math.abs(a.t)<TD)return;const ra=pmStat(D.filter(r=>!g.f(r))),neg=a.exp<0;if(neg?!(a.exp<(ra.exp||0)):!(a.exp>(ra.exp||0)))return;
+  const b=pmStat(V.filter(g.f)),rb=pmStat(V.filter(r=>!g.f(r))),it={l:g.l,neg,a,b};
+  if(b.n<MINB){it.why=`validation hors échantillon impossible : ${b.n} trade(s) < ${MINB}`;o.pend.push(it)}else if(neg?(b.exp<0&&b.exp<(rb.exp||0)):(b.exp>0&&b.exp>(rb.exp||0)))o.ok.push(it);else o.rej++});
+ const L=PD().filter(d=>d.ag==ag).sort((a,b)=>a.t-b.t),lc=Math.floor(L.length*.6),LD=L.slice(0,lc),LV=L.slice(lc);
+ [...new Set(L.map(d=>d.stn))].forEach(s=>Object.keys(ERR).forEach(k=>{const a=LD.filter(d=>d.stn==s),b=LV.filter(d=>d.stn==s);if(a.length<10||b.length<5)return;const pa=a.filter(d=>d.tags.includes(k)).length/a.length,pb=b.filter(d=>d.tags.includes(k)).length/b.length;if(pa>=.4&&pb>=.3)o.err.push({s,k,pa,pb})}));return o}
+/* Interface : onglet Mémoire */
+let MEM={ag:'sc',v:'stats',dim:'st',gd:'st'};ACT.mmv=v=>{MEM.v=v;render()};document.addEventListener('change',e=>{const d=e.target.dataset;if(d&&d.mm){MEM[d.mm]=e.target.value;render()}});
+const mmSel=(n,l,o)=>'<label class="sm">'+l+'</label><select data-mm="'+n+'">'+o.map(x=>'<option value="'+x[0]+'" '+(MEM[n]==x[0]?'selected':'')+'>'+esc(x[1])+'</option>').join('')+'</select>',vd=v=>v=='oui'?'<b class="dn">oui</b>':v=='non'?'<span class="up">non</span>':'<span class="g">'+(v=='na'?'sans objet':'n/d')+'</span>';
+function memStats(A){const T=pmStat(A),W=wil(T.w,T.n),C=pmStat(A.filter(r=>r.cf==1)),N=pmStat(A.filter(r=>r.cf===0)),g={};A.forEach(r=>{const k=DIM[MEM.dim][1](r);(g[k]=g[k]||[]).push(r)});
+ const rows=Object.entries(g).sort((a,b)=>b[1].length-a[1].length).map(([k,L])=>{const q=pmStat(L),w=wil(q.w,q.n);return[esc(k),q.n,f2(q.wr,0)+' % ['+f2(w[0],0)+'–'+f2(w[1],0)+']',f2(q.exp)+(q.se!=null?' ±'+f2(1.96*q.se):''),q.pf==null?'—':q.pf===Infinity?'∞':f2(q.pf),q.R==null?'—':f2(q.R),f2(q.net),rel(q.n)]}),bf=A.filter(r=>r.bf).length;
+ return(A.length?'':'<div class="warn">Aucune clôture enregistrée pour ce bot.</div>')+'<div class="card"><b>Résumé · '+(MEM.ag=='sc'?'AI Scalper':'AI Opportunity Trader')+'</b>'+(T.n<30?'<div class="sm g">'+T.n+' clôture(s) : échantillon trop petit pour conclure.</div>':'')
+ +row('Clôtures (transaction complète, ventes partielles incluses)',T.n)+row('Résultat net, frais inclus',`<span class="${cl(T.net)}">${f2(T.net)} €</span>`)+row('Taux de réussite (IC95)',T.n?f2(T.wr,0)+' % ['+f2(W[0],0)+'–'+f2(W[1],0)+']':'—')+row('Espérance nette ± IC95',T.n?f2(T.exp)+' €'+(T.se!=null?' ± '+f2(1.96*T.se):''):'—')+row('Multiple de risque moyen (R)',T.R==null?'—':f2(T.R))
+ +row('Conformes à la stratégie · espérance',C.n+' · '+(C.n?f2(C.exp)+' €':'—'))+row('Non conformes · espérance',N.n+' · '+(N.n?f2(N.exp)+' €':'—'))+(bf?'<div class="sm g">'+bf+' clôture(s) reconstituées depuis l\'historique (contexte d\'entrée absent : conformité, R et conditions d\'entrée n/d).</div>':'')+'</div>'
+ +'<div class="card">'+mmSel('dim','Dimension de découpage',Object.keys(DIM).map(k=>[k,DIM[k][0]]))+tbl(['Valeur','n','Réussite [IC95]','Esp. € ± IC','PF','R moy.','Net €','Fiabilité'],rows)+'<div class="sm g">Fiabilité : n < 10 insuffisant, 10–29 indicatif, ≥ 30 exploitable. Une espérance dont l\'IC contient 0 n\'est pas distinguable du hasard.</div></div>'}
+const dgHtml=d=>'<details class="card"><summary><b>'+esc(d.s)+'</b> · '+esc(d.stn)+' · <span class="dn">'+f2(d.pnl)+' €</span>'+(d.R==null?'':' ('+f2(d.R)+' R)')+' <span class="g sm">'+dt(d.t)+'</span><div class="sm">'+(d.cf==null?'<span class="g">conformité n/d</span>':d.cf?'<span class="up">conforme à la stratégie</span>':'<b class="dn">non conforme</b>')+' · '+(d.tags.length?d.tags.map(k=>esc(DGS[k])).join(', '):'<span class="g">aucune erreur identifiée : perte normale</span>')+'</div></summary>'
+ +d.items.map(i=>'<div class="row sm"><span>'+esc(DGL[i.k])+'</span><span style="text-align:right">'+vd(i.v)+(i.e?'<div class="g">'+esc(i.e)+'</div>':'')+'</span></div>').join('')+(d.ci&&d.ci.length?'<div class="sm dn" style="margin-top:6px">Écarts au plan : '+d.ci.map(esc).join(' ; ')+'</div>':'')
+ +'<div class="sm g" style="margin-top:6px">Un diagnostic décrit une perte ; une seule perte ne modifie jamais une stratégie.</div></details>';
+function memErr(){const L=PD().filter(d=>d.ag==MEM.ag).sort((a,b)=>a.t-b.t);if(!L.length)return'<div class="card g sm">Aucune perte diagnostiquée pour ce bot (le diagnostic démarre avec cette version).</div>';
+ const h=Math.floor(L.length/2),H1=L.slice(0,h),H2=L.slice(h),p=(a,k)=>a.length?a.filter(d=>d.tags.includes(k)).length/a.length*100:null,ks=Object.keys(DGL),GK={st:'stn',s:'s',reg:'reg',tf:'tf'},gk=GK[MEM.gd]||'stn',G={};L.forEach(d=>(G[d[gk]]=G[d[gk]]||[]).push(d));
+ return'<div class="card"><b>Erreurs récurrentes · '+L.length+' perte(s) diagnostiquée(s)</b><div class="sm g">Parts calculées sur les pertes (une perte peut cumuler plusieurs erreurs). Évolution : 1re moitié des pertes contre 2e moitié, affichée à partir de 20 pertes et d\'un écart ≥ 10 points.</div>'
+ +tbl(['Erreur','Pertes','Part','1re moitié','2e moitié','Évolution'],ks.map(k=>{const n=L.filter(d=>d.tags.includes(k)).length,a=p(H1,k),b=p(H2,k),dl=a!=null&&b!=null?b-a:null;return[esc(DGL[k]),n,f2(n/L.length*100,0)+' %',a==null?'—':f2(a,0)+' %',b==null?'—':f2(b,0)+' %',L.length<20?'<span class="g">n < 20</span>':Math.abs(dl)<10?'stable':dl>0?'<span class="dn">↑ '+f2(dl,0)+' pts</span>':'<span class="up">↓ '+f2(-dl,0)+' pts</span>']}))
+ +row('Pertes sans erreur identifiée (aléa normal)',L.filter(d=>!d.tags.length).length)+row('Pertes conformes / non conformes à la stratégie',L.filter(d=>d.cf==1).length+' / '+L.filter(d=>d.cf===0).length)+'</div>'
+ +'<div class="card">'+mmSel('gd','Comparer par',[['st','Stratégie'],['s','Actif'],['reg','Régime'],['tf','Unité de temps']])+tbl(['Valeur','Pertes'].concat(ks.map(k=>DGS[k])),Object.entries(G).sort((a,b)=>b[1].length-a[1].length).map(([v,A])=>[esc(v),A.length].concat(ks.map(k=>{const n=A.filter(d=>d.tags.includes(k)).length;return n?n+' ('+f2(n/A.length*100,0)+' %)':'—'}))))+'</div>'}
+function memReco(){const o=pmReco(MEM.ag),it=x=>[esc(x.l),x.neg?'<b class="dn">réduire ou suspendre</b>':'<b class="up">conserver</b>',x.a.n+' · '+f2(x.a.exp)+' €',x.b.n+' · '+f2(x.b.exp)+' €'],H=['Hypothèse','Action','Appr. n · esp.','Valid. n · esp.'];
+ return'<div class="card"><b>Recommandations</b><div class="sm g">Échantillon : '+o.n+' clôture(s) ('+o.nd+' pour la découverte, '+o.nv+' pour la validation hors échantillon). Rien n\'est appliqué automatiquement : testez toute piste dans l\'Optimiseur ou le Labo avant de modifier un réglage.</div></div>'
+ +(o.n<MINT?'<div class="warn">Moins de '+MINT+' clôtures : échantillon insuffisant, aucune recommandation. Les statistiques de l\'onglet restent descriptives.</div>'
+ :'<div class="card"><b>Validées hors échantillon ('+o.ok.length+')</b>'+(o.ok.length?tbl(H,o.ok.map(it)):'<div class="sm g">Aucune hypothèse ne passe la validation : conservez vos réglages.</div>')+'</div>'
+ +(o.pend.length?'<div class="card"><b>Hypothèses non validées ('+o.pend.length+')</b><div class="sm g">À ne pas appliquer : '+o.pend.map(x=>esc(x.l)+' ('+esc(x.why)+')').join(' ; ')+'</div></div>':'')
+ +'<div class="card"><b>Erreurs récurrentes stables</b><div class="sm g">Même erreur dans ≥ 40 % des anciennes pertes et ≥ 30 % des récentes (min. 10 et 5 pertes). Descriptif : n\'établit pas de lien causal, les gagnants n\'étant pas diagnostiqués.</div>'+(o.err.length?tbl(['Stratégie','Erreur','Anciennes','Récentes','Piste à tester'],o.err.map(e=>[esc(e.s),esc(DGL[e.k]),f2(e.pa*100,0)+' %',f2(e.pb*100,0)+' %',esc(ERR[e.k])])):'<div class="sm g">Aucune erreur récurrente stable.</div>')+'</div>')
+ +'<div class="card sm g"><b>Méthode et limites</b><br>Pas de machine learning : statistiques descriptives et tests chronologiques. Découverte sur les 60 % de clôtures les plus anciennes : segment d\'au moins '+MINA+' trades, |t| ≥ '+TD+' et meilleur ou pire que le reste du bot. Validation sur les 40 % récents : au moins '+MINB+' trades, même signe et même écart au reste du bot. Dimensions testées : stratégie, actif, régime, unité de temps, type de signal, conditions d\'entrée (les sorties sont des résultats, non testées). '
+ +'Hypothèses testées : '+o.test+', soit environ '+f2(o.test*.033,1)+' faux positif(s) attendu(s) par hasard ; '+o.rej+' hypothèse(s) infirmée(s) hors échantillon. Le slippage est modélisé (fixe), pas mesuré sur carnet réel ; le régime « favorable a priori » est une hypothèse de travail.</div>'}
+PAGES.mem=()=>banners()+'<div class="card"><b>Mémoire de performance et apprentissage statistique</b><div class="sm g">Chaque clôture est journalisée par bot, stratégie, actif, régime, unité de temps, type de signal, conditions d\'entrée et de sortie. Les deux bots ne sont jamais mélangés. Aucun machine learning : statistiques descriptives uniquement. Le journal commence avec cette version (clôtures antérieures reconstituées sans contexte).</div>'
+ +mmSel('ag','Bot',[['sc','AI Scalper'],['opp','AI Opportunity Trader']])+'<div class="btns" style="overflow-x:auto;flex-wrap:nowrap">'+[['stats','Statistiques'],['diag','Pertes'],['err','Erreurs'],['reco','Recommandations']].map(x=>'<button class="'+(MEM.v==x[0]?'':'s')+'" style="flex:0 0 auto" data-a="mmv" data-v="'+x[0]+'">'+x[1]+'</button>').join('')+'</div></div>'
+ +(MEM.v=='stats'?memStats(PJ().filter(r=>r.ag==MEM.ag)):MEM.v=='diag'?(PD().filter(d=>d.ag==MEM.ag).slice(0,30).map(dgHtml).join('')||'<div class="card g sm">Aucune perte diagnostiquée pour ce bot.</div>'):MEM.v=='err'?memErr():memReco());
+PG.splice(3,0,['mem','Mémoire']);
+/* ===== Phase 8.5 : entrées et sorties. Bougies clôturées garanties, filtres d'avantage net (Scalper et Opportunity), AI Seller, classification des actualités.
+   Les filtres vivent DANS les fonctions d'entrée des stratégies (SD[k].e, OSD[k].c) : Scalper, Opportunity, alertes, Labo et Optimiseur appliquent donc les mêmes règles. ===== */
+const P85=()=>{const p=S.p85=S.p85&&typeof S.p85=='object'?S.p85:{};if(p.on===undefined)Object.assign(p,{on:true,sell:true,minEdge:1,minVol:.8,oppTrail:false,gb:{},sv:[],ng:{}});return p},
+TFB={6e4:'1m',3e5:'5m',9e5:'15m',36e5:'1h',144e5:'4h'},HTO={'1m':['1h','4h'],'5m':['15m','1h','4h'],'15m':['1h','4h'],'1h':['4h'],'4h':[]},GB={},KA={t:0,drop:0,gaps:0,late:0,skew:0,st:0,rows:[]};
+/* Garde des bougies : seule une bougie dont la clôture est passée (horloge serveur Binance, pas seulement locale) peut alimenter un indicateur */
+const kClean=(k,lim)=>{let d=0;while(k.length&&k[k.length-1].ct>=lim){k.pop();d++}return d};
+async function kSkew(){try{const j=await bj('/api/v3/time');if(j&&j.serverTime){KA.skew=j.serverTime-Date.now();KA.st=Date.now()}}catch(e){}}
+function kGuard(){const now=Date.now();if(now-KA.t<3e3)return;KA.t=now;if(now-KA.st>3e5&&!kGuard.b){kGuard.b=1;kSkew().finally(()=>kGuard.b=0)}
+ const lim=now+Math.min(0,KA.skew),rows=[];let g=0;
+ const ck=(k,bar,nm)=>{if(!k||!k.length)return;KA.drop+=kClean(k,lim);for(let j=1;j<k.length;j++)if(k[j].ct-k[j-1].ct!=bar)g++;const a=now-k[k.length-1].ct;if(a>bar+(bar==6e4?S.cfg.stale*1e3:HTSTALE+9e4))rows.push(nm+' : dernière bougie clôturée il y a '+Math.round(a/1e3)+' s')};
+ SY.forEach(s=>{ck(K[s],6e4,s+' 1 min');if(K[s])H[s]=K[s].map(x=>x.c);Object.keys(KT[s]||{}).forEach(t=>ck(KT[s][t],BAR[t],s+' '+t))});KA.gaps=g;KA.late=rows.length;KA.rows=rows.slice(0,8)}
+{const s0=scalper;scalper=function(){try{kGuard()}catch(e){}const r=s0();try{SY.forEach(s=>{const b=GB[s];if(b&&Date.now()-b.t<5e3&&/^aucun signal/.test(D.sym[s]||''))D.sym[s]=`signal ${SD[b.k].n} refusé par les filtres 8.5 : ${b.r}`})}catch(e){}return r}}
+{const o0=oppCycle;oppCycle=function(){try{kGuard()}catch(e){}return o0()}}
+/* Compléments calculés uniquement sur bougies clôturées (confirmation définitive) */
+function xk(k){const n=k.length;if(n<60)return null;const c=k.map(x=>x.c),e=ema(c,12),g=ema(c,26),ml=e.map((x,j)=>x-g[j]),sg=ema(ml,9),L=k[n-1],rg=L.h-L.l,a=atr(k,14);
+ return{mhp:ml[n-2]-sg[n-2],rp:rsi(c.slice(0,-1)),up:c[n-1]>c[n-2]?1:0,cb:c[n-1]>Math.max(...k.slice(-21,-1).map(x=>x.h))?1:0,w:rg>0?(L.h-L.c)/rg:0,sl:sma(c,50)>sma(c.slice(0,-5),50)?1:0,s20:sma(c,20)>sma(c.slice(0,-5),20)?1:0,dep:a>0?(Math.max(...k.slice(-20).map(x=>x.h))-c[n-1])/a:0,tf:TFB[L.ct-k[n-2].ct]||'?'}}
+{const i0=ind;ind=function(s){const i=i0(s);if(i){const X=xk(K[s]);if(X){i.X=X;i.sy=s;i.tf='1m'}}return i}}
+{const t0=ti;ti=function(k,s){const i=t0(k,s);if(i){const X=xk(k);if(X){i.X=X;i.sy=s;i.tf=X.tf}}return i}}
+const htBear=i=>(HTO[i.tf]||[]).map(t=>i.sy&&freshT(i.sy,t)?tfi(i.sy,t):null).filter(Boolean).some(u=>u.p<u.s50&&u.mh<=0),
+pq=i=>{const X=i.X;return X?(X.s20?25:0)+(X.sl?15:0)+(X.dep>=.5&&X.dep<=2.5?25:0)+(X.up?20:0)+(i.vr>=.6?15:0):0},
+ovalid=(k,tf)=>(((S.ores||{}).opp||{}).units||[]).some(u=>u.key==k+'|'+tf&&u.ok);
+function gbRec(s,k,r){const t=Date.now(),b=GB[s];if(b&&b.k==k&&t-b.t<5e3){b.t=t;return}GB[s]={t,k,r};const q=r.replace(/[\d.,]+/g,'#').slice(0,60),g=P85().gb;g[q]=(g[q]||0)+1}
+/* Scalper : renvoie le motif du refus, ou '' si l'entrée a un avantage net suffisant */
+function scGate(i,k,P){const p=P85(),X=i.X;if(!p.on||!X)return'';const c=S.cfg,cost=2*c.fee+c.slip,a=i.a/i.p*100,ex=(i.p-i.m)/i.a;
+ if(P&&P.tpM&&(P.tpM*a-cost)/cost<p.minEdge)return`avantage net insuffisant : objectif ${f2(P.tpM*a)} % pour ${f2(cost)} % de coûts aller-retour`;
+ if(k=='rev')return X.up&&i.r>X.rp?'':`rebond non confirmé sur bougie clôturée (RSI ${i.r>X.rp?'en hausse':'sans redressement'})`;
+ if(i.r>70||i.p>i.bu||ex>=2)return`entrée tardive (RSI ${f2(i.r,0)}, écart à la MA20 ${f2(ex)} ATR)`;
+ if(i.p-i.pc>i.a)return`prix déjà à ${f2((i.p-i.pc)/i.a)} ATR au-dessus de la dernière clôture (poursuite, slippage probable)`;
+ if(i.vr<p.minVol)return`volume relatif ×${f2(i.vr)} < ×${p.minVol}`;
+ if(i.mh<=0||i.mh<X.mhp)return`momentum clôturé non confirmé (MACD ${i.mh>0?'en recul':'≤ signal'})`;
+ if(k=='brk'&&!(X.cb&&X.w<=.5))return`faux breakout probable : clôture sous la cassure ou longue mèche haute`;
+ if(i.ar<.7&&k!='trend')return`volatilité en contraction (ATR ×${f2(i.ar)})`;
+ return htBear(i)?`tendance supérieure (1 h / 4 h) baissière`:''}
+Object.keys(SD).forEach(k=>{const e0=SD[k].e,x0=SD[k].x;SD[k].e=(i,P)=>{if(!e0(i,P))return false;const r=scGate(i,k,P);if(r&&i.sy)gbRec(i.sy,k,r);return!r};if(k!='rev')SD[k].x=i=>x0(i)&&x0(Object.assign({},i,{p:i.pc}))});
+/* Opportunity : conditions ajoutées à chaque stratégie (elles apparaissent aussi dans « manque : … » des diagnostics) */
+{const OC=(k,l,f)=>OSD[k].c.push([l,f]),on=()=>P85().on;
+ ['trend','brk','pull','mom','vol'].forEach(k=>{OC(k,`tendance supérieure non baissière`,i=>!on()||!htBear(i));OC(k,`pas d'entrée tardive`,i=>!on()||!(i.r>72||i.p>i.bu))});
+ ['trend','brk','mom','vol'].forEach(k=>OC(k,`volume ≥ ×0,8 de la moyenne`,i=>!on()||i.vr>=P85().minVol));
+ OC('brk',`cassure confirmée par une clôture, sans longue mèche`,i=>!on()||!i.X||(i.X.cb&&i.X.w<=.5));OC('pull',`qualité du pullback ≥ 60/100`,i=>!on()||pq(i)>=60);
+ ['rev','rvs'].forEach(k=>OC(k,`retournement validé hors échantillon, ou tendance supérieure non baissière`,i=>!on()||!htBear(i)||ovalid(k,i.tf)));
+ OKY.forEach(k=>{if(k!='rev'&&k!='rvs'){const x0=OSD[k].x;OSD[k].x=i=>x0(i)&&x0(Object.assign({},i,{p:i.pc}))}})}
+/* Optimiseur Opportunity : option « stop suiveur » pour comparer, sur le test hors échantillon, avec et sans (les ventes partielles ne sont pas modélisées par le moteur) */
+{const o0=oCfg;oCfg=function(b){const c=o0(b);if(b=='opp'&&P85().oppTrail){c.trailAct=S.cfg.trailAct;c.trail=S.cfg.trail}return c}}
+{const g0=optGo;optGo=async function(){const b=OP.bot,fl=!!P85().oppTrail,t0=Date.now();await g0();const R=(S.ores||{})[b];if(b=='opp'&&R&&R.t>=t0){const m={};R.units.forEach(u=>m[u.key]={n:u.ph.te.n,e:u.ph.te.exp,ok:u.ok});(S.ocmp=S.ocmp||{})[fl?'on':'off']={t:R.t,u:m};save()}}}
+/* AI Seller : évaluation de chaque position ouverte ; garde-fou permanent : un stop n'est jamais abaissé */
+function sellEval(x){const c=S.cfg,ag=agOf(x),p=M[x.s]?M[x.s].p:x.e,i=ag=='opp'?tfi(x.s,x.tf):ind(x.s),r0=x.r0||(x.e-x.sl)||1,bar=ag=='opp'?(BAR[x.tf]||36e5):6e4,X=i&&i.X;
+ return{ag,i,R:(p-x.e)/r0,u:(p-x.e)*x.q,net:x.q*p*(1-c.slip/100)*(1-c.fee/100)-(x.q*x.e+x.fee),xf:x.q*p*c.fee/100,risk:Math.max(0,(p-x.sl)*x.q),d:(Date.now()-x.t)/bar,min:Math.round((Date.now()-x.t)/6e4),md:!!X&&i.mh<0&&i.mh<X.mhp,below:!!i&&i.pc<i.m}}
+function svLog(x,k,m){const v=P85().sv;v.unshift({t:Date.now(),s:x.s,ag:agOf(x),k,m});v.length=Math.min(v.length,30);log('Seller','décision',x.s+' · '+k+' : '+m)}
+function sellRule(x){if(!fresh(x.s)||agOf(x)=='man')return;const e=sellEval(x);if(!e.i)return;let w='';
+ if(e.R<=-.5&&e.md&&e.below&&e.d>=(e.ag=='opp'?3:5))w=`dégradation confirmée sur perte latente (${f2(e.R)} R, MACD en recul, clôture sous la MA20) : pas d'attente de récupération`;
+ else if(e.ag=='opp'&&e.d>=12&&e.R<.25)w=`durée excessive sans progression (${Math.round(e.d)} bougies ${TN[x.tf]}, ${f2(e.R)} R)`;
+ if(w){svLog(x,'sortie',w+' ; P&L net '+f2(e.net)+' €');close(x,'sortie Seller : '+w,M[x.s].p)}}
+{const m1=monitor;monitor=function(){const pre=S.pos.map(x=>[x,x.sl]);try{if(P85().sell)S.pos.slice().forEach(sellRule);newsAlerts()}catch(e){}const r=m1();try{pre.forEach(([x,s])=>{if(S.pos.includes(x)&&x.sl<s){const b=x.sl;x.sl=s;svLog(x,'garde-fou',`abaissement du stop refusé (${f2(b,4)} → ${f2(s,4)} €) : une règle de sécurité interdit d'augmenter le risque`)}})}catch(e){}return r}}
+/* AI News : classification par mots-clés sur le titre. Rien n'est inventé ; les positives n'influencent plus aucun score (alerte de contexte seulement) */
+const NMAC=/\bFed\b|FOMC|\bCPI\b|inflation|rate (cut|hike)|interest rate|jobs report|\bGDP\b|treasury|recession|tariff|payroll/i,NREG=/\bSEC\b|\bCFTC\b|regulat|legislat|\bMiCA\b|lawsuit|\bsues?\b|\bban(s|ned)?\b|court|compliance|licen[sc]e|congress|\bETF\b/i,
+ovl=(a,b)=>{const w=s=>new Set(String(s).toLowerCase().match(/[a-z0-9]{5,}/g)||[]),x=w(a);let c=0;w(b).forEach(t=>{if(x.has(t))c++});return c};
+function newsCls(n,all){const i=newsInfo(n),t=n.title||'',src=!!(n.source&&n.url),cor=all.filter(m=>m!==n&&m.source&&m.source!==n.source&&Math.abs(m.published_on-n.published_on)<864e2&&ovl(m.title,t)>=2).length;
+ return{n,i,cat:NREG.test(t)?'réglementaire':NMAC.test(t)?'macroéconomique':i.as.length?'propre à un actif ('+i.as.join('/')+')':'général crypto',sent:i.sg>0?'positive':i.sg<0?'négative':NPOS.test(t)&&NNEG.test(t)?'ambiguë':'neutre',old:i.age>S.cfg.newsHrs,
+  ver:i.unc?'non vérifiée (formulation hypothétique)':!src?'non vérifiée (source ou lien absent)':cor?'recoupée par '+cor+' autre(s) source(s) (titres proches)':'source indiquée, non recoupée'}}
+{const i0=newsImpact;newsImpact=function(s){const w=i0(s);if(w.adj>0)w.adj=0;return w}}
+function newsAlerts(){const now=Date.now();if(S.newsOn===false||!Array.isArray(NEWS)||now-(newsAlerts.t||0)<3e4)return;newsAlerts.t=now;const g=P85().ng;
+ NEWS.slice(0,40).forEach(n=>{const c=newsCls(n,NEWS),i=c.i,k=n.published_on+'|'+String(n.title).slice(0,40);if(g[k]||c.old||i.age>2||(c.sent!='négative'&&c.sent!='positive'))return;
+  const gen=c.cat=='macroéconomique'||c.cat=='réglementaire',aff=S.pos.filter(x=>i.as.includes(x.s)||(gen&&!i.as.length));if(!aff.length&&c.sent=='positive')return;g[k]=now;const ks=Object.keys(g);if(ks.length>80)ks.slice(0,40).forEach(q=>delete g[q]);
+  log('News',c.sent=='négative'&&aff.length?'alerte':'actualité',`Actualité ${c.sent} · ${c.cat} · ${i.fr} · ${c.ver} · ${n.prov||'fournisseur ?'} / ${n.source||'source ?'} : « ${String(n.title).slice(0,90)} » · ${aff.length?'position(s) concernée(s) : '+aff.map(x=>x.s+' ('+f2((M[x.s]?M[x.s].p:x.e)*x.q-x.e*x.q)+' € latent)').join(', '):'aucune position ouverte concernée'} · mots-clés du titre uniquement, aucune décision automatique`)})}
+function st85(){const R=[],c=(n,ok,d)=>R.push({n,ok:!!ok,d:d||''}),now=Date.now(),p=P85(),o=p.on;p.on=true;
+ try{const mk=(j,u)=>({h:2,l:1,c:1.5,v:1,ct:now-(10-j)*6e4+(u?1e5:0)}),k=Array.from({length:11},(_,j)=>mk(j,j==10)),d=kClean(k,now),k2=Array.from({length:10},(_,j)=>mk(j));
+  c('Bougie en formation retirée',d==1&&k.length==10&&k[9].ct<now,d+' retirée');c('Bougies clôturées conservées',kClean(k2,now)==0&&k2.length==10);
+  const i={p:100,pc:100,a:.5,m:99.9,bu:101,r:50,vr:1.2,mh:.1,ar:1,X:{mhp:.05,up:1,rp:45,cb:1,w:.2}},P={tpM:3};
+  c('Entrée saine acceptée',!scGate(i,'mom',P),scGate(i,'mom',P));c('Entrée tardive refusée',/tardive/.test(scGate(Object.assign({},i,{r:75}),'mom',P)));
+  c('Avantage net insuffisant → Scalper inactif',/avantage/.test(scGate(Object.assign({},i,{a:.05}),'mom',P)));c('Faux breakout refusé',/breakout/.test(scGate(Object.assign({},i,{X:Object.assign({},i.X,{cb:0})}),'brk',P)));
+  c('Retournement sans rebond clôturé refusé',/rebond/.test(scGate(Object.assign({},i,{r:40,X:Object.assign({},i.X,{rp:45})}),'rev',P)))}
+ catch(e){c('Exécution du test',false,e.message)}finally{p.on=o}p.tst={t:now,ok:R.every(r=>r.ok),R}}
+/* Interface : onglet E/S */
+ACT.esT=v=>{const p=P85();p[v]=!p[v];save();render()};ACT.est=()=>{st85();render()};
+const esB=(v,l)=>'<button class="'+(P85()[v]?'':'s')+'" data-a="esT" data-v="'+v+'">'+l+' : '+(P85()[v]?'activé':'désactivé')+'</button>',bd=(t,c)=>'<span style="border:1px solid #1677ff66;border-radius:6px;padding:0 5px;margin-right:4px" class="'+(c||'g')+'">'+esc(t)+'</span>';
+PAGES.es=()=>{const p=P85(),A=KA,T=p.tst,oc=S.ocmp||{},L=Array.isArray(NEWS)?NEWS:[],C=L.slice(0,40).map(n=>newsCls(n,L)),cnt=f=>Object.entries(C.reduce((m,c)=>(m[f(c)]=(m[f(c)]||0)+1,m),{})).sort((a,b)=>b[1]-a[1]),
+ ou=Object.keys((oc.on||{}).u||{}).filter(k=>(oc.off||{}).u&&oc.off.u[k]),po=S.pj?PJ().filter(r=>r.ag=='opp'):[],pp=pmStat(po.filter(r=>r.pp>0)),pn=pmStat(po.filter(r=>!r.pp));
+ return banners()+'<div class="card"><b>Entrées et sorties · Phase 8.5</b><div class="sm g">Les filtres d\'entrée sont appliqués dans les stratégies elles-mêmes : Scalper, Opportunity, Labo et Optimiseur testent donc les mêmes règles. Ils n\'ont pas été validés hors échantillon : comparez dans le Labo, filtres activés puis désactivés.</div><div class="btns">'+esB('on','Filtres d\'entrée')+esB('sell','Règles de sortie du Seller')+esB('oppTrail','Optimiseur Opportunity avec stop suiveur')+'</div></div>'
+ +'<div class="card"><b>Intégrité des bougies</b><div class="sm g">Les deux collecteurs écartent déjà la bougie en formation ; cette garde le revérifie à chaque cycle avec l\'horloge serveur Binance. Le prix en direct sert aux ordres, jamais à la confirmation d\'un signal.</div>'+row('Bougies en formation retirées (cumul)',A.drop)+row('Décalage horloge locale / serveur',A.st?f2(A.skew/1e3,1)+' s':'non mesuré')+row('Trous de données (signalés, jamais comblés)',A.gaps)+row('Séries en retard',A.late)+(A.rows.length?'<div class="sm g">'+A.rows.map(esc).join('<br>')+'</div>':'')
+ +'<div class="btns"><button class="s" data-a="est">Vérifier le garde-fou</button></div>'+(T?'<div class="row"><b>TEST · '+dt(T.t)+'</b><b class="'+(T.ok?'up':'dn')+'">'+(T.ok?'RÉUSSI':'ÉCHEC')+'</b></div>'+T.R.map(r=>'<div class="row sm"><span>'+(r.ok?'✔':'✘')+' '+esc(r.n)+'</span><span class="g">'+esc(r.d)+'</span></div>').join(''):'')+'</div>'
+ +'<div class="card"><b>Scalper : refus par avantage net</b><div class="sm g">Le Scalper reste inactif sans avantage net : coûts, tendance supérieure, volume, momentum clôturé, entrée tardive, faux breakout, retournement non confirmé.</div>'+bars(Object.entries(p.gb).sort((a,b)=>b[1]-a[1]).slice(0,8))+'</div>'
+ +'<div class="card"><b>Opportunity : sorties évaluées hors échantillon</b><div class="sm g">Lancez l\'Optimiseur Opportunity deux fois (stop suiveur désactivé puis activé) : comparaison sur la phase de test (25 %, hors échantillon). Ventes partielles : non modélisées par le moteur, seulement descriptives ci-dessous.</div>'
+ +(ou.length?tbl(['Unité','Esp. test sans','Esp. test avec','Fiable sans / avec'],ou.map(k=>{const a=oc.off.u[k],b=oc.on.u[k];return[esc(k),f2(a.e)+' ('+a.n+')',f2(b.e)+' ('+b.n+')',(a.ok?'oui':'non')+' / '+(b.ok?'oui':'non')]})):'<div class="sm g">Comparaison indisponible : il manque une des deux optimisations.</div>')
+ +row('Réel · avec vente partielle',pp.n+' trades · '+(pp.n?f2(pp.exp)+' €':'—'))+row('Réel · sans vente partielle',pn.n+' trades · '+(pn.n?f2(pn.exp)+' €':'—'))+'<div class="sm g">Échantillons trop petits pour conclure sous 30 trades.</div></div>'
+ +'<div class="card"><b>AI Seller · positions ouvertes</b>'+(S.pos.length?tbl(['Actif','R latent','Net si sortie €','Risque restant €','Frais sortie €','Durée','Momentum'],S.pos.map(x=>{const e=sellEval(x);return[esc(x.s)+' '+(e.ag=='opp'?'Opp.':e.ag=='sc'?'Scal.':'Man.'),f2(e.R),'<span class="'+cl(e.net)+'">'+f2(e.net)+'</span>',f2(e.risk),f2(e.xf),e.min+' min',e.i?e.md?'<span class="dn">dégradé</span>':'ok':'n/d']})):'<div class="sm g">Aucune position ouverte.</div>')
+ +'<div class="sm g">Un stop n\'est jamais abaissé (garde-fou permanent). Les signaux de sortie par invalidation exigent aussi la dernière clôture. Aucune sortie discrétionnaire sur un gain latent.</div>'+(p.sv.slice(0,8).map(v=>'<div class="row sm"><span class="g">'+dt(v.t)+'</span><span><b>'+esc(v.s)+'</b> · '+esc(v.k)+' : '+esc(v.m)+'</span></div>').join('')||'<div class="sm g">Aucune décision du Seller.</div>')+'</div>'
+ +'<div class="card"><b>AI News · classification</b><div class="warn sm">Analyse par mots-clés sur les titres uniquement : ni lecture du texte, ni IA, ni vérification externe. Une actualité positive n\'influence aucun score ; une négative peut réduire un score ou déclencher une alerte, jamais un achat.</div>'
+ +row('Fournisseur · dernière collecte',esc(NS.prov||'aucun')+(NS.fb?' (secours)':'')+' · '+(NS.ok?Math.round((Date.now()-NS.ok)/6e4)+' min':'jamais'))+row('Actualités classées',C.length)
+ +'<div class="sm" style="margin-top:6px">'+[['Sens',c=>c.sent],['Type',c=>c.cat.replace(/ \(.*/,'')],['Fraîcheur',c=>c.old?'ancienne (hors fenêtre)':'dans la fenêtre'],['Provenance',c=>/^non/.test(c.ver)?'non vérifiée':/recoupée/.test(c.ver)?'recoupée':'source indiquée']].map(g=>'<b>'+g[0]+' :</b> '+cnt(g[1]).map(e=>esc(e[0])+' '+e[1]).join(' · ')).join('<br>')+'</div>'
+ +C.slice(0,8).map(c=>'<details style="border-top:1px solid #1677ff22;padding:6px 0"><summary class="sm">'+bd(c.sent,c.sent=='positive'?'up':c.sent=='négative'?'dn':'g')+bd(c.cat.replace(/ \(.*/,''))+bd(c.i.fr)+esc(String(c.n.title).slice(0,70))+'</summary><div class="sm g">'+esc(c.cat)+' · '+esc(c.ver)+' · '+esc(c.n.prov||'?')+' / '+esc(c.n.source||'?')+' · '+dt(c.n.published_on*1000)+'</div></details>').join('')+'</div>'};
+PG.splice(4,0,['es','E/S']);
 /* Start */
 flushFix();head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script></body></html>
