@@ -100,7 +100,7 @@ function risk(p){const c=S.cfg,E=eq(),R=[];
  if(p.risk>E*c.risk/100*1.001)R.push('risque '+f2(p.risk)+' € > limite '+f2(E*c.risk/100)+' €');
  if(p.cost>E*c.maxAsset/100)R.push('exposition par actif > '+c.maxAsset+' %');if(engaged()+p.cost>E*c.expMax/100)R.push('exposition totale > '+c.expMax+' % du capital');if(agOf(p)=='opp'&&S.pos.filter(x=>agOf(x)=='opp').length+S.ord.filter(o=>o.status=='open'&&agOf(o)=='opp').length>=c.oppMax)R.push('nombre max de positions Opportunity atteint');
  if(p.cost+p.fee>S.cash-reserved())R.push('cash insuffisant');
- if(p.rr<c.minRR)R.push('rendement/risque net '+f2(p.rr)+' < '+c.minRR+' (frais et slippage inclus)');
+ {const m=rrMin(p);if(p.rr<m)R.push('rendement/risque net '+f2(p.rr)+' < '+f2(m)+' (frais et slippage inclus)')}
  return R}
 function limits(){const E=eq(),c=S.cfg;if(S.day!=new Date().toDateString()){S.day=new Date().toDateString();S.dayStart=E;if(S.halt&&S.halt.startsWith('perte'))S.halt=null}
  S.peak=Math.max(S.peak,E);if(S.halt)return;const dl=(E-S.dayStart)/S.dayStart*100,dd=(S.peak-E)/S.peak*100;
@@ -1359,5 +1359,27 @@ document.addEventListener('keydown',e=>{if(e.key=='Enter'&&e.target.id=='ccin'){
 document.addEventListener('change',e=>{const d=e.target.dataset;if(d.pf)ccPfSet(d.pf,e.target.value);if(d.gl){const v=e.target.value;ccPush('u','Objectif '+d.gl+' = '+esc(v||'—'));ccPush('a',ccGoal('objectif '+({d:'journalier',w:'hebdomadaire',m:'mensuel'})[d.gl]+(v===''?' supprime':' '+v),'Objectif saisi dans le tableau'));ccDraw()}});
 PG.splice(1,0,['cc','Command Center']);
 /* Start */
+/* ===== Phase 9 (cœur) : profils du Scalper, score pondéré, objectif net adapté aux coûts, taxonomie des refus.
+   Règles programmées et statistiques simples : AUCUN modèle d'apprentissage automatique. Les paramètres des profils sont des hypothèses non validées (à confronter au Labo et à l'Optimiseur). ===== */
+const P9PR={prudent:{n:'Prudent',ms:70,edge:1,k:3,soft:1.2,rr:1.2},equilibre:{n:'Équilibré',ms:60,edge:.6,k:3.5,soft:1,rr:1},dynamique:{n:'Dynamique',ms:52,edge:.4,k:4,soft:.7,rr:.8}},P9RRMIN=.6,P9L={},
+P9=()=>{const p=S.p9=S.p9&&typeof S.p9=='object'?S.p9:{};if(!P9PR[p.prof])p.prof='dynamique';if(!p.rf||typeof p.rf!='object')p.rf={};if(!(p.n>=0))p.n=0;return p},p9pf=()=>P9PR[P9().prof],
+rrMin=p=>SD[p.st]&&agOf(p)=='sc'?Math.max(P9RRMIN,Math.min(S.cfg.minRR,p9pf().rr)):S.cfg.minRR,
+p9cl=m=>/^refusée/.test(m)?(/conflit|AI News|Supervisor/.test(m)?'Refus du Supervisor':'Refus du Risk Manager'):/acceptée|transmise/.test(m)?'Proposition transmise ou acceptée':/frais trop/.test(m)?'Frais trop élevés':/volume insuffisant/.test(m)?'Volume insuffisant':/déjà ouvert/.test(m)?'Position déjà ouverte':/taille nulle|cash|budget/.test(m)?'Capital insuffisant':/R\/R|rendement/.test(m)?'Rendement net insuffisant':/périmée|absente|historique/.test(m)?'Données indisponibles':/aucun signal/.test(m)?'Aucun signal détecté':/score|filtres|tardive|anti-répétition/.test(m)?'Signal détecté mais insuffisant':'Autre';
+/* Filtre d'entrée : seuls les blocages économiques ou extrêmes sont éliminatoires ; le reste est une pénalité de score pondérée par le profil */
+scGate=function(i,k,P){const p=P85(),X=i.X;if(!p.on||!X)return'';const c=S.cfg,pf=p9pf(),cost=2*c.fee+c.slip,a=i.a/i.p*100,ex=(i.p-i.m)/i.a,need=cost*(1+pf.edge),pen=[],A=(l,v)=>pen.push([l,v*pf.soft]);
+ if(need>pf.k*a)return`frais trop élevés : avantage net insuffisant (il faut +${f2(need)} % pour des coûts de ${f2(cost)} %, ATR 1 min ${f2(a,2)} %)`;
+ if(i.vr<.3)return`volume insuffisant (×${f2(i.vr)})`;if(i.r>80||ex>=3)return`entrée trop tardive (RSI ${f2(i.r,0)}, ${f2(ex)} ATR de la MA20)`;
+ if(k=='rev'){if(!(X.up&&i.r>X.rp))A('rebond non confirmé',12)}else{if(i.r>70||i.p>i.bu||ex>=2)A('entrée tardive',10);if(i.p-i.pc>i.a)A('prix > 1 ATR au-dessus de la clôture',8);if(i.mh<=0||i.mh<X.mhp)A('momentum clôturé non confirmé',8);if(k=='brk'&&!(X.cb&&X.w<=.5))A('faux breakout probable',15);if(i.ar<.7&&k!='trend')A('volatilité en contraction',8)}
+ if(i.vr<p.minVol)A('volume faible ×'+f2(i.vr),10);if(htBear(i))A('tendance 1 h / 4 h baissière',12);
+ (i.p9=i.p9||{})[k]={pen:pen.reduce((t,x)=>t+x[1],0),w:pen.map(x=>x[0]).join(', ')};return''};
+{const a0=analyse;analyse=function(s){const r=a0(s),q=r.sig&&r.i&&r.i.p9&&r.i.p9[r.st];P9L[s]=null;if(q){P9L[s]={raw:r.conf,pw:q.w};r.conf=Math.max(0,Math.round(r.conf-q.pen))}return r}}
+/* Objectif net : relevé au minimum rentable après coûts si la volatilité le permet, sinon l'entrée est refusée en amont (frais trop élevés) */
+{const b0=buyer;buyer=function(a){const p=b0(a),c=S.cfg,pf=p9pf(),k=p.entry*(2*c.fee/100+c.slip/100),mn=p.entry+k*(1+pf.edge);if(p.tp<mn&&mn-p.entry<=pf.k*a.i.a){p.tp=mn;const u=p.entry-p.sl+k;p.rr=u>0?(p.tp-p.entry-k)/u:0}return p}}
+{const s0=scalper;scalper=function(){const c=S.cfg,m0=c.minScore,r0=c.minRR,pf=p9pf();if(S.scalp=='run'){c.minScore=pf.ms;c.minRR=Math.min(c.minRR,pf.rr)}try{const r=s0();SY.forEach(s=>{const m=D.sym[s],l=P9L[s];if(m&&l&&/ignoré : score/.test(m)&&!/pénalités/.test(m))D.sym[s]=m+` · brut ${l.raw}, pénalités : ${l.pw||'aucune'}`});return r}finally{c.minScore=m0;c.minRR=r0}}}
+{const a0=arbitrate;arbitrate=function(){const r=a0.apply(this,arguments);try{const p=P9();if(S.scalp=='run'&&D.rc&&p.lc!=D.rc){p.lc=D.rc;p.n++;Object.values(D.sym||{}).forEach(m=>{const k=p9cl(String(m));p.rf[k]=(p.rf[k]||0)+1})}}catch(e){}return r}}
+ACT.p9=v=>{if(!P9PR[v])return;P9().prof=v;log('Admin','paramètre','Profil du Scalper : '+P9PR[v].n);save();render()};
+{const p0=PAGES.scalp;PAGES.scalp=function(){const p=P9(),pf=p9pf(),rf=Object.entries(p.rf).sort((a,b)=>b[1]-a[1]),tot=rf.reduce((t,x)=>t+x[1],0)||1;
+ return p0()+`<div class="card"><b>Profil du Scalper · Phase 9</b><div class="btns">${Object.keys(P9PR).map(k=>`<button class="${p.prof==k?'':'s'}" data-a="p9" data-v="${k}">${P9PR[k].n}</button>`).join('')}</div><div class="sm g">Seuil de score ${pf.ms} · avantage net minimal ×${pf.edge} des coûts · R/R net minimal ${pf.rr} (plancher du Risk Manager : ${P9RRMIN}). Ce profil remplace le seuil de score et le R/R du Scalper tant qu'il est actif. Hypothèses non validées statistiquement ; règles programmées, sans apprentissage automatique.</div></div><div class="card"><b>Motifs d'inaction (${p.n} cycles)</b>${rf.map(([k,v])=>row(esc(k),v+' ('+f2(v/tot*100,0)+' %)')).join('')||'<p class="g">Aucun cycle analysé depuis la mise à jour.</p>'}</div>`}}
+
 flushFix();head();render();tick();if(!window.TM)window.TM=setInterval(tick,10000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});
 </script></body></html>
